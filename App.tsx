@@ -54,23 +54,56 @@ export default function App() {
   const [styleState, setStyleState] = useState<OnChangeStateEvent | null>(null);
   const [htmlValue, setHtmlValue] = useState('');
 
-  const previewMarkdown = `# Markdown Preview
+  const previewMarkdown = `# Heading 1
+## Heading 2
+### Heading 3
+#### Heading 4
+##### Heading 5
+###### Heading 6
 
-This pane renders a markdown document with \`react-native-enriched-markdown\`.
+This paragraph tests inline features: **bold**, *italic*, _underline_, ~~strikethrough~~, ***bold+italic***, \`inline code\`, and a [link](https://reactnative.dev).
 
-## Formatting
+---
 
-- **Bold text**
-- *Italic text*
-- ~~Strikethrough~~
-- [React Native](https://reactnative.dev)
+## Lists
 
-> This is a blockquote rendered natively.
+- Unordered level 1
+  - Unordered level 2
+    - Unordered level 3
+- Second top-level bullet
+
+1. Ordered level 1
+   1. Ordered level 2
+      1. Ordered level 3
+   2. Another nested ordered item
+2. Second top-level number
+
+## Blockquote
+
+> Quote level 1
+> > Quote level 2
+> > > Quote level 3
+
+## Code Block
 
 \`\`\`ts
-const message = "Hello from markdown preview";
-console.log(message);
+type User = { id: number; name: string };
+
+const users: User[] = [
+  { id: 1, name: "Ada" },
+  { id: 2, name: "Grace" },
+];
+
+console.log(users.map((u) => u.name).join(", "));
 \`\`\`
+
+## Images
+
+Block image:
+
+![React Native logo](https://reactnative.dev/img/tiny_logo.png)
+
+Inline image in text: look here ![inline](https://reactnative.dev/img/tiny_logo.png) right inside a sentence.
 `;
 
   return (
@@ -156,6 +189,7 @@ console.log(message);
               <ScrollView contentContainerStyle={styles.previewContent}>
                 <EnrichedMarkdownText
                   markdown={previewMarkdown}
+                  md4cFlags={{ underline: true }}
                   onLinkPress={({ url }) => {
                     void Linking.openURL(url);
                   }}
