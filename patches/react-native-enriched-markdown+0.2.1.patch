@@ -1,0 +1,2355 @@
+diff --git a/node_modules/react-native-enriched-markdown/ReactNativeEnrichedMarkdown.podspec b/node_modules/react-native-enriched-markdown/ReactNativeEnrichedMarkdown.podspec
+index 95f288c..133f273 100644
+--- a/node_modules/react-native-enriched-markdown/ReactNativeEnrichedMarkdown.podspec
++++ b/node_modules/react-native-enriched-markdown/ReactNativeEnrichedMarkdown.podspec
+@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
+   s.license      = package["license"]
+   s.authors      = package["author"]
+ 
+-  s.platforms    = { :ios => min_ios_version_supported }
++  s.platforms    = { :ios => min_ios_version_supported, :osx => 11.0 }
+   s.source       = { :git => "https://github.com/software-mansion-labs/react-native-enriched-markdown.git", :tag => "#{s.version}" }
+ 
+   s.source_files = "ios/**/*.{h,m,mm,cpp}", "cpp/md4c/*.{c,h}", "cpp/parser/*.{hpp,cpp}"
+diff --git a/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.h b/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.h
+index e6dcf25..9c25f2a 100644
+--- a/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.h
++++ b/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.h
+@@ -1,6 +1,7 @@
+ #import "StyleConfig.h"
+ #import <React/RCTViewComponentView.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ #ifndef EnrichedMarkdownTextNativeComponent_h
+ #define EnrichedMarkdownTextNativeComponent_h
+diff --git a/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.mm b/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.mm
+index e45ad9a..bd87df6 100644
+--- a/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.mm
++++ b/node_modules/react-native-enriched-markdown/ios/EnrichedMarkdownText.mm
+@@ -2,12 +2,10 @@
+ #import "AccessibilityInfo.h"
+ #import "AttributedRenderer.h"
+ #import "CodeBlockBackground.h"
+-#import "EditMenuUtils.h"
+ #import "EnrichedMarkdownImageAttachment.h"
+ #import "FontUtils.h"
+ #import "LastElementUtils.h"
+ #import "MarkdownASTNode.h"
+-#import "MarkdownAccessibilityElementBuilder.h"
+ #import "MarkdownExtractor.h"
+ #import "MarkdownParser.h"
+ #import "ParagraphStyleUtils.h"
+@@ -27,6 +25,21 @@
+ #import <React/RCTConversions.h>
+ #import <React/RCTFont.h>
+ #import <react/utils/ManagedObjectWrapper.h>
++#include <TargetConditionals.h>
++
++#if !TARGET_OS_OSX
++#import "EditMenuUtils.h"
++#import "MarkdownAccessibilityElementBuilder.h"
++#else
++#import <React/RCTUITextView.h>
++typedef NSClickGestureRecognizer UITapGestureRecognizer;
++#endif
++
++#if TARGET_OS_OSX
++typedef RCTUITextView EnrichedMarkdownPlatformTextView;
++#else
++typedef UITextView EnrichedMarkdownPlatformTextView;
++#endif
+ 
+ using namespace facebook::react;
+ 
+@@ -39,7 +52,7 @@ - (void)setupLayoutManager;
+ @end
+ 
+ @implementation EnrichedMarkdownText {
+-  UITextView *_textView;
++  EnrichedMarkdownPlatformTextView *_textView;
+   MarkdownParser *_parser;
+   NSString *_cachedMarkdown;
+   StyleConfig *_config;
+@@ -67,7 +80,11 @@ @implementation EnrichedMarkdownText {
+ 
+   // Accessibility data for VoiceOver
+   AccessibilityInfo *_accessibilityInfo;
++#if TARGET_OS_OSX
++  NSMutableArray *_accessibilityElements;
++#else
+   NSMutableArray<UIAccessibilityElement *> *_accessibilityElements;
++#endif
+ }
+ 
+ + (ComponentDescriptorProvider)componentDescriptorProvider
+@@ -80,7 +97,7 @@ + (ComponentDescriptorProvider)componentDescriptorProvider
+ - (CGSize)measureSize:(CGFloat)maxWidth
+ {
+   NSAttributedString *text = _textView.attributedText;
+-  CGFloat defaultHeight = [UIFont systemFontOfSize:16.0].lineHeight;
++  CGFloat defaultHeight = UIFontLineHeight([UIFont systemFontOfSize:16.0]);
+ 
+   if (text.length == 0) {
+     return CGSizeMake(maxWidth, defaultHeight);
+@@ -143,7 +160,7 @@ - (instancetype)initWithFrame:(CGRect)frame
+     static const auto defaultProps = std::make_shared<const EnrichedMarkdownTextProps>();
+     _props = defaultProps;
+ 
+-    self.backgroundColor = [UIColor clearColor];
++    self.backgroundColor = [RCTUIColor clearColor];
+     _parser = [[MarkdownParser alloc] init];
+     _md4cFlags = [Md4cFlags defaultFlags];
+ 
+@@ -158,10 +175,12 @@ - (instancetype)initWithFrame:(CGRect)frame
+     _currentFontScale = RCTFontSizeMultiplier();
+     _enableLinkPreview = YES;
+ 
++#if !TARGET_OS_OSX
+     [[NSNotificationCenter defaultCenter] addObserver:self
+                                              selector:@selector(contentSizeCategoryDidChange:)
+                                                  name:UIContentSizeCategoryDidChangeNotification
+                                                object:nil];
++#endif
+ 
+     [self setupTextView];
+   }
+@@ -171,7 +190,9 @@ - (instancetype)initWithFrame:(CGRect)frame
+ 
+ - (void)dealloc
+ {
++#if !TARGET_OS_OSX
+   [[NSNotificationCenter defaultCenter] removeObserver:self name:UIContentSizeCategoryDidChangeNotification object:nil];
++#endif
+ }
+ 
+ - (CGFloat)effectiveFontScale
+@@ -202,17 +223,21 @@ - (void)contentSizeCategoryDidChange:(NSNotification *)notification
+ 
+ - (void)setupTextView
+ {
+-  _textView = [[UITextView alloc] init];
++  _textView = [[EnrichedMarkdownPlatformTextView alloc] init];
+   _textView.text = @"";
+   _textView.font = [UIFont systemFontOfSize:16.0];
+-  _textView.backgroundColor = [UIColor clearColor];
+-  _textView.textColor = [UIColor blackColor];
++  _textView.backgroundColor = [RCTUIColor clearColor];
++  _textView.textColor = [RCTUIColor blackColor];
+   _textView.editable = NO;
+   _textView.delegate = self;
+   _textView.scrollEnabled = NO;
++#if !TARGET_OS_OSX
+   _textView.showsVerticalScrollIndicator = NO;
+   _textView.showsHorizontalScrollIndicator = NO;
+   _textView.textContainerInset = UIEdgeInsetsZero;
++#else
++  _textView.textContainerInsets = UIEdgeInsetsZero;
++#endif
+   _textView.textContainer.lineFragmentPadding = 0;
+   // Disable UITextView's default link styling - we handle it directly in attributed strings
+   _textView.linkTextAttributes = @{};
+@@ -222,7 +247,9 @@ - (void)setupTextView
+   // Hide initially to prevent flash before content is rendered
+   _textView.hidden = YES;
+   // Disable textView's built-in accessibility - we provide custom elements with proper traits
++#if !TARGET_OS_OSX
+   _textView.accessibilityElementsHidden = YES;
++#endif
+ 
+   // Add tap gesture recognizer
+   UITapGestureRecognizer *tapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
+@@ -233,7 +260,7 @@ - (void)setupTextView
+   self.contentView = _textView;
+ }
+ 
+-- (void)didAddSubview:(UIView *)subview
++- (void)didAddSubview:(RCTUIView *)subview
+ {
+   [super didAddSubview:subview];
+ 
+@@ -243,7 +270,7 @@ - (void)didAddSubview:(UIView *)subview
+   }
+ }
+ 
+-- (void)willRemoveSubview:(UIView *)subview
++- (void)willRemoveSubview:(RCTUIView *)subview
+ {
+   // Clean up layout manager when text view is removed
+   if (subview == _textView && _textView.layoutManager != nil) {
+@@ -410,8 +437,12 @@ - (void)applyRenderedText:(NSMutableAttributedString *)attributedText
+   [_textView.layoutManager invalidateLayoutForCharacterRange:NSMakeRange(0, attributedText.length)
+                                         actualCharacterRange:NULL];
+ 
++#if TARGET_OS_OSX
++  [_textView setNeedsDisplay:YES];
++#else
+   [_textView setNeedsLayout];
+   [_textView setNeedsDisplay];
++#endif
+   [self setNeedsLayout];
+ 
+   // Request height recalculation from shadow node FIRST
+@@ -468,7 +499,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.paragraph.color != oldViewProps.markdownStyle.paragraph.color) {
+     if (newViewProps.markdownStyle.paragraph.color) {
+-      UIColor *paragraphColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.paragraph.color);
++      RCTUIColor *paragraphColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.paragraph.color);
+       [_config setParagraphColor:paragraphColor];
+     } else {
+       [_config setParagraphColor:nullptr];
+@@ -524,7 +555,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.h1.color != oldViewProps.markdownStyle.h1.color) {
+     if (newViewProps.markdownStyle.h1.color) {
+-      UIColor *h1Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h1.color);
++      RCTUIColor *h1Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h1.color);
+       [_config setH1Color:h1Color];
+     } else {
+       [_config setH1Color:nullptr];
+@@ -580,7 +611,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.h2.color != oldViewProps.markdownStyle.h2.color) {
+     if (newViewProps.markdownStyle.h2.color) {
+-      UIColor *h2Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h2.color);
++      RCTUIColor *h2Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h2.color);
+       [_config setH2Color:h2Color];
+     } else {
+       [_config setH2Color:nullptr];
+@@ -636,7 +667,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.h3.color != oldViewProps.markdownStyle.h3.color) {
+     if (newViewProps.markdownStyle.h3.color) {
+-      UIColor *h3Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h3.color);
++      RCTUIColor *h3Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h3.color);
+       [_config setH3Color:h3Color];
+     } else {
+       [_config setH3Color:nullptr];
+@@ -692,7 +723,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.h4.color != oldViewProps.markdownStyle.h4.color) {
+     if (newViewProps.markdownStyle.h4.color) {
+-      UIColor *h4Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h4.color);
++      RCTUIColor *h4Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h4.color);
+       [_config setH4Color:h4Color];
+     } else {
+       [_config setH4Color:nullptr];
+@@ -748,7 +779,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.h5.color != oldViewProps.markdownStyle.h5.color) {
+     if (newViewProps.markdownStyle.h5.color) {
+-      UIColor *h5Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h5.color);
++      RCTUIColor *h5Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h5.color);
+       [_config setH5Color:h5Color];
+     } else {
+       [_config setH5Color:nullptr];
+@@ -804,7 +835,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.h6.color != oldViewProps.markdownStyle.h6.color) {
+     if (newViewProps.markdownStyle.h6.color) {
+-      UIColor *h6Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h6.color);
++      RCTUIColor *h6Color = RCTUIColorFromSharedColor(newViewProps.markdownStyle.h6.color);
+       [_config setH6Color:h6Color];
+     } else {
+       [_config setH6Color:nullptr];
+@@ -853,7 +884,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.blockquote.color != oldViewProps.markdownStyle.blockquote.color) {
+-    UIColor *blockquoteColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.blockquote.color);
++    RCTUIColor *blockquoteColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.blockquote.color);
+     [_config setBlockquoteColor:blockquoteColor];
+     stylePropChanged = YES;
+   }
+@@ -874,7 +905,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.blockquote.borderColor != oldViewProps.markdownStyle.blockquote.borderColor) {
+-    UIColor *blockquoteBorderColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.blockquote.borderColor);
++    RCTUIColor *blockquoteBorderColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.blockquote.borderColor);
+     [_config setBlockquoteBorderColor:blockquoteBorderColor];
+     stylePropChanged = YES;
+   }
+@@ -890,14 +921,14 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.blockquote.backgroundColor != oldViewProps.markdownStyle.blockquote.backgroundColor) {
+-    UIColor *blockquoteBackgroundColor =
++    RCTUIColor *blockquoteBackgroundColor =
+         RCTUIColorFromSharedColor(newViewProps.markdownStyle.blockquote.backgroundColor);
+     [_config setBlockquoteBackgroundColor:blockquoteBackgroundColor];
+     stylePropChanged = YES;
+   }
+ 
+   if (newViewProps.markdownStyle.link.color != oldViewProps.markdownStyle.link.color) {
+-    UIColor *linkColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.link.color);
++    RCTUIColor *linkColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.link.color);
+     [_config setLinkColor:linkColor];
+     stylePropChanged = YES;
+   }
+@@ -909,7 +940,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.strong.color != oldViewProps.markdownStyle.strong.color) {
+     if (newViewProps.markdownStyle.strong.color) {
+-      UIColor *strongColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.strong.color);
++      RCTUIColor *strongColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.strong.color);
+       [_config setStrongColor:strongColor];
+     } else {
+       [_config setStrongColor:nullptr];
+@@ -919,7 +950,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.em.color != oldViewProps.markdownStyle.em.color) {
+     if (newViewProps.markdownStyle.em.color) {
+-      UIColor *emphasisColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.em.color);
++      RCTUIColor *emphasisColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.em.color);
+       [_config setEmphasisColor:emphasisColor];
+     } else {
+       [_config setEmphasisColor:nullptr];
+@@ -928,20 +959,20 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.strikethrough.color != oldViewProps.markdownStyle.strikethrough.color) {
+-    UIColor *strikethroughColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.strikethrough.color);
++    RCTUIColor *strikethroughColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.strikethrough.color);
+     [_config setStrikethroughColor:strikethroughColor];
+     stylePropChanged = YES;
+   }
+ 
+   if (newViewProps.markdownStyle.underline.color != oldViewProps.markdownStyle.underline.color) {
+-    UIColor *underlineColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.underline.color);
++    RCTUIColor *underlineColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.underline.color);
+     [_config setUnderlineColor:underlineColor];
+     stylePropChanged = YES;
+   }
+ 
+   if (newViewProps.markdownStyle.code.color != oldViewProps.markdownStyle.code.color) {
+     if (newViewProps.markdownStyle.code.color) {
+-      UIColor *codeColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.code.color);
++      RCTUIColor *codeColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.code.color);
+       [_config setCodeColor:codeColor];
+     } else {
+       [_config setCodeColor:nullptr];
+@@ -951,7 +982,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.code.backgroundColor != oldViewProps.markdownStyle.code.backgroundColor) {
+     if (newViewProps.markdownStyle.code.backgroundColor) {
+-      UIColor *codeBackgroundColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.code.backgroundColor);
++      RCTUIColor *codeBackgroundColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.code.backgroundColor);
+       [_config setCodeBackgroundColor:codeBackgroundColor];
+     } else {
+       [_config setCodeBackgroundColor:nullptr];
+@@ -961,7 +992,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   if (newViewProps.markdownStyle.code.borderColor != oldViewProps.markdownStyle.code.borderColor) {
+     if (newViewProps.markdownStyle.code.borderColor) {
+-      UIColor *codeBorderColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.code.borderColor);
++      RCTUIColor *codeBorderColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.code.borderColor);
+       [_config setCodeBorderColor:codeBorderColor];
+     } else {
+       [_config setCodeBorderColor:nullptr];
+@@ -1013,7 +1044,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.list.color != oldViewProps.markdownStyle.list.color) {
+-    UIColor *listColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.list.color);
++    RCTUIColor *listColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.list.color);
+     [_config setListStyleColor:listColor];
+     stylePropChanged = YES;
+   }
+@@ -1034,7 +1065,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.list.bulletColor != oldViewProps.markdownStyle.list.bulletColor) {
+-    UIColor *bulletColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.list.bulletColor);
++    RCTUIColor *bulletColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.list.bulletColor);
+     [_config setListStyleBulletColor:bulletColor];
+     stylePropChanged = YES;
+   }
+@@ -1045,7 +1076,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.list.markerColor != oldViewProps.markdownStyle.list.markerColor) {
+-    UIColor *markerColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.list.markerColor);
++    RCTUIColor *markerColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.list.markerColor);
+     [_config setListStyleMarkerColor:markerColor];
+     stylePropChanged = YES;
+   }
+@@ -1088,7 +1119,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.codeBlock.color != oldViewProps.markdownStyle.codeBlock.color) {
+-    UIColor *codeBlockColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.codeBlock.color);
++    RCTUIColor *codeBlockColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.codeBlock.color);
+     [_config setCodeBlockColor:codeBlockColor];
+     stylePropChanged = YES;
+   }
+@@ -1109,13 +1140,13 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   if (newViewProps.markdownStyle.codeBlock.backgroundColor != oldViewProps.markdownStyle.codeBlock.backgroundColor) {
+-    UIColor *codeBlockBackgroundColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.codeBlock.backgroundColor);
++    RCTUIColor *codeBlockBackgroundColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.codeBlock.backgroundColor);
+     [_config setCodeBlockBackgroundColor:codeBlockBackgroundColor];
+     stylePropChanged = YES;
+   }
+ 
+   if (newViewProps.markdownStyle.codeBlock.borderColor != oldViewProps.markdownStyle.codeBlock.borderColor) {
+-    UIColor *codeBlockBorderColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.codeBlock.borderColor);
++    RCTUIColor *codeBlockBorderColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.codeBlock.borderColor);
+     [_config setCodeBlockBorderColor:codeBlockBorderColor];
+     stylePropChanged = YES;
+   }
+@@ -1137,7 +1168,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+ 
+   // Thematic break style
+   if (newViewProps.markdownStyle.thematicBreak.color != oldViewProps.markdownStyle.thematicBreak.color) {
+-    UIColor *thematicBreakColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.thematicBreak.color);
++    RCTUIColor *thematicBreakColor = RCTUIColorFromSharedColor(newViewProps.markdownStyle.thematicBreak.color);
+     [_config setThematicBreakColor:thematicBreakColor];
+     stylePropChanged = YES;
+   }
+@@ -1251,13 +1282,18 @@ - (void)textTapped:(UITapGestureRecognizer *)recognizer
+    *    - We adjust for text container insets to get precise text coordinates
+    */
+ 
+-  UITextView *textView = (UITextView *)recognizer.view;
++  EnrichedMarkdownPlatformTextView *textView = (EnrichedMarkdownPlatformTextView *)recognizer.view;
+ 
+   // Location of the tap in text-container coordinates
+   NSLayoutManager *layoutManager = textView.layoutManager;
+   CGPoint location = [recognizer locationInView:textView];
++#if TARGET_OS_OSX
++  location.x -= textView.textContainerInsets.left;
++  location.y -= textView.textContainerInsets.top;
++#else
+   location.x -= textView.textContainerInset.left;
+   location.y -= textView.textContainerInset.top;
++#endif
+ 
+   /*
+    * 3. CHARACTER INDEX LOOKUP:
+@@ -1298,6 +1334,7 @@ - (void)textTapped:(UITapGestureRecognizer *)recognizer
+ 
+ #pragma mark - UITextViewDelegate (Link Interaction)
+ 
++#if !TARGET_OS_OSX
+ - (BOOL)textView:(UITextView *)textView
+     shouldInteractWithURL:(NSURL *)URL
+                   inRange:(NSRange)characterRange
+@@ -1325,24 +1362,31 @@ - (BOOL)textView:(UITextView *)textView
+   }
+   return NO;
+ }
++#endif
+ 
+ #pragma mark - UITextViewDelegate (Edit Menu)
+ 
+ // Customizes the edit menu
++#if !TARGET_OS_OSX
+ - (UIMenu *)textView:(UITextView *)textView
+     editMenuForTextInRange:(NSRange)range
+           suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0))
+ {
+   return buildEditMenuForSelection(_textView.attributedText, range, _cachedMarkdown, _config, suggestedActions);
+ }
++#endif
+ 
+ #pragma mark - Accessibility (VoiceOver Navigation)
+ 
+ - (void)buildAccessibilityElements
+ {
++#if TARGET_OS_OSX
++  _accessibilityElements = [NSMutableArray array];
++#else
+   _accessibilityElements = [MarkdownAccessibilityElementBuilder buildElementsForTextView:_textView
+                                                                                     info:_accessibilityInfo
+                                                                                container:self];
++#endif
+ }
+ 
+ - (BOOL)isAccessibilityElement
+@@ -1373,6 +1417,7 @@ - (NSArray *)accessibilityElements
+   return _accessibilityElements;
+ }
+ 
++#if !TARGET_OS_OSX
+ - (NSArray<UIAccessibilityCustomRotor *> *)accessibilityCustomRotors
+ {
+   NSMutableArray<UIAccessibilityCustomRotor *> *rotors = [NSMutableArray array];
+@@ -1397,5 +1442,6 @@ - (NSArray *)accessibilityElements
+ 
+   return rotors;
+ }
++#endif
+ 
+ @end
+diff --git a/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.h b/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.h
+index f0bee3a..d79ca49 100644
+--- a/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.h
++++ b/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.h
+@@ -1,8 +1,18 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
++#include <TargetConditionals.h>
++#if TARGET_OS_OSX
++#import <React/RCTUITextView.h>
++#endif
+ 
+ @class StyleConfig;
++#if TARGET_OS_OSX
++typedef RCTUITextView EnrichedMarkdownPlatformTextView;
++#else
+ @class UITextView;
++typedef UITextView EnrichedMarkdownPlatformTextView;
++#endif
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.m b/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.m
+index 9fd61cd..748bd2c 100644
+--- a/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.m
++++ b/node_modules/react-native-enriched-markdown/ios/attachments/EnrichedMarkdownImageAttachment.m
+@@ -11,9 +11,9 @@ @interface EnrichedMarkdownImageAttachment ()
+ @property (nonatomic, assign) CGFloat cachedHeight;
+ @property (nonatomic, assign) CGFloat cachedBorderRadius;
+ @property (nonatomic, weak) NSTextContainer *textContainer;
+-@property (nonatomic, weak) UITextView *textView;
+-@property (nonatomic, strong) UIImage *originalImage;
+-@property (nonatomic, strong) UIImage *loadedImage;
++@property (nonatomic, weak) EnrichedMarkdownPlatformTextView *textView;
++@property (nonatomic, strong) RCTUIImage *originalImage;
++@property (nonatomic, strong) RCTUIImage *loadedImage;
+ @property (nonatomic, strong) NSURLSessionDataTask *loadingTask;
+ @end
+ 
+@@ -44,7 +44,7 @@ - (CGRect)attachmentBoundsForTextContainer:(NSTextContainer *)textContainer
+   return CGRectMake(0, 0, width, height);
+ }
+ 
+-- (UIImage *)imageForBounds:(CGRect)imageBounds
++- (RCTUIImage *)imageForBounds:(CGRect)imageBounds
+               textContainer:(NSTextContainer *)textContainer
+              characterIndex:(NSUInteger)charIndex
+ {
+@@ -59,7 +59,7 @@ - (UIImage *)imageForBounds:(CGRect)imageBounds
+   return self.loadedImage ?: self.image;
+ }
+ 
+-- (void)handleLoadedImage:(UIImage *)image
++- (void)handleLoadedImage:(RCTUIImage *)image
+ {
+   if (!image)
+     return;
+@@ -75,7 +75,7 @@ - (void)handleLoadedImage:(UIImage *)image
+     if (targetWidth <= 0)
+       return;
+ 
+-    UIImage *scaled = [strongSelf scaleImage:image
++    RCTUIImage *scaled = [strongSelf scaleImage:image
+                                      toWidth:targetWidth
+                                       height:strongSelf.cachedHeight
+                                 borderRadius:strongSelf.cachedBorderRadius];
+@@ -99,11 +99,11 @@ - (void)handleLoadedImage:(UIImage *)image
+ 
+ - (void)updateUI
+ {
+-  UITextView *textView = [self getTextView];
++  EnrichedMarkdownPlatformTextView *textView = [self getTextView];
+   if (!textView)
+     return;
+ 
+-  NSRange range = [self findAttachmentRangeInText:textView.attributedText];
++  NSRange range = [self findAttachmentRangeInText:textView.textStorage];
+   if (range.location == NSNotFound)
+     return;
+ 
+@@ -113,7 +113,7 @@ - (void)updateUI
+   }
+ }
+ 
+-- (UITextView *)getTextView
++- (EnrichedMarkdownPlatformTextView *)getTextView
+ {
+   if (self.textView)
+     return self.textView;
+@@ -127,8 +127,8 @@ - (void)setupPlaceholder
+ {
+   CGFloat size = self.cachedHeight;
+   self.bounds = CGRectMake(0, 0, size, size);
+-  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
+-  self.image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx){}];
++  RCTUIGraphicsImageRenderer *renderer = [[RCTUIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
++  self.image = [renderer imageWithActions:^(RCTUIGraphicsImageRendererContext *ctx){}];
+ }
+ 
+ - (void)loadImage
+@@ -144,19 +144,20 @@ - (void)loadImage
+       [[NSURLSession sharedSession] dataTaskWithURL:url
+                                   completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+                                     if (data) {
+-                                      UIImage *img = [UIImage imageWithData:data];
++                                      RCTUIImage *img = UIImageWithData(data);
+                                       dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf handleLoadedImage:img]; });
+                                     }
+                                   }];
+   [self.loadingTask resume];
+ }
+ 
+-- (UIImage *)scaleImage:(UIImage *)image toWidth:(CGFloat)w height:(CGFloat)h borderRadius:(CGFloat)r
++- (RCTUIImage *)scaleImage:(RCTUIImage *)image toWidth:(CGFloat)w height:(CGFloat)h borderRadius:(CGFloat)r
+ {
+-  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(w, h)];
+-  return [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
++  RCTUIGraphicsImageRenderer *renderer = [[RCTUIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(w, h)];
++  return [renderer imageWithActions:^(RCTUIGraphicsImageRendererContext *ctx) {
+     if (r > 0) {
+-      [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, w, h) cornerRadius:r] addClip];
++      UIBezierPath *clipPath = UIBezierPathWithRoundedRect(CGRectMake(0, 0, w, h), r);
++      [clipPath addClip];
+     }
+     [image drawInRect:CGRectMake(0, 0, w, h)];
+   }];
+diff --git a/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.h b/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.h
+index 3437788..3c9e471 100644
+--- a/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.h
++++ b/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.h
+@@ -1,11 +1,12 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+ @interface ThematicBreakAttachment : NSTextAttachment
+ 
+-@property (nonatomic, strong) UIColor *lineColor;
++@property (nonatomic, strong) RCTUIColor *lineColor;
+ @property (nonatomic, assign) CGFloat lineHeight;
+ @property (nonatomic, assign) CGFloat marginTop;
+ @property (nonatomic, assign) CGFloat marginBottom;
+diff --git a/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.m b/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.m
+index 8b60525..58c4dbc 100644
+--- a/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.m
++++ b/node_modules/react-native-enriched-markdown/ios/attachments/ThematicBreakAttachment.m
+@@ -11,13 +11,13 @@ - (CGRect)attachmentBoundsForTextContainer:(NSTextContainer *)textContainer
+   return CGRectMake(0, 0, CGRectGetWidth(lineFrag), totalHeight);
+ }
+ 
+-- (UIImage *)imageForBounds:(CGRect)imageBounds
++- (RCTUIImage *)imageForBounds:(CGRect)imageBounds
+               textContainer:(NSTextContainer *)textContainer
+              characterIndex:(NSUInteger)charIndex
+ {
+-  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:imageBounds.size];
++  RCTUIGraphicsImageRenderer *renderer = [[RCTUIGraphicsImageRenderer alloc] initWithSize:imageBounds.size];
+ 
+-  return [renderer imageWithActions:^(UIGraphicsImageRendererContext *_Nonnull rendererContext) {
++  return [renderer imageWithActions:^(RCTUIGraphicsImageRendererContext *_Nonnull rendererContext) {
+     CGContextRef ctx = rendererContext.CGContext;
+ 
+     CGFloat lineY = self.marginTop + (self.lineHeight / 2.0);
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/BlockquoteRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/BlockquoteRenderer.m
+index 563af46..7f2823a 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/BlockquoteRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/BlockquoteRenderer.m
+@@ -109,7 +109,7 @@ - (void)applyBaseBlockquoteStyle:(NSMutableAttributedString *)output
+                            range:(NSRange)blockquoteRange
+                            depth:(NSInteger)currentDepth
+                     levelSpacing:(CGFloat)levelSpacing
+-                 backgroundColor:(UIColor *)backgroundColor
++                 backgroundColor:(RCTUIColor *)backgroundColor
+                       lineHeight:(CGFloat)lineHeight
+ {
+   NSMutableParagraphStyle *paragraphStyle = getOrCreateParagraphStyle(output, blockquoteRange.location);
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/CodeBlockRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/CodeBlockRenderer.m
+index a283e9b..0b4f787 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/CodeBlockRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/CodeBlockRenderer.m
+@@ -52,7 +52,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+   NSRange contentRange = NSMakeRange(contentStart, contentEnd - contentStart);
+ 
+   UIFont *codeFont = [_config codeBlockFont];
+-  UIColor *codeColor = [_config codeBlockColor];
++  RCTUIColor *codeColor = [_config codeBlockColor];
+   if (codeColor) {
+     [output addAttributes:@{NSFontAttributeName : codeFont, NSForegroundColorAttributeName : codeColor}
+                     range:contentRange];
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/CodeRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/CodeRenderer.m
+index 97aaaac..0a1e33f 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/CodeRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/CodeRenderer.m
+@@ -26,7 +26,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+ 
+   BlockStyle *blockStyle = [context getBlockStyle];
+ 
+-  UIColor *codeColor = _config.codeColor;
++  RCTUIColor *codeColor = _config.codeColor;
+ 
+   UIFont *blockFont = cachedFontFromBlockStyle(blockStyle, context);
+ 
+@@ -51,7 +51,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+     codeAttributes[CodeAttributeName] = @YES;
+ 
+     // Store block line height directly for CodeBackground to use
+-    codeAttributes[@"BlockLineHeight"] = @(blockFont.lineHeight);
++    codeAttributes[@"BlockLineHeight"] = @(UIFontLineHeight(blockFont));
+ 
+     [output setAttributes:codeAttributes range:range];
+   }
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/EmphasisRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/EmphasisRenderer.m
+index 87206a8..46114be 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/EmphasisRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/EmphasisRenderer.m
+@@ -32,10 +32,10 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+     return;
+ 
+   BlockStyle *blockStyle = [context getBlockStyle];
+-  UIColor *configEmphasisColor = [_config emphasisColor];
++  RCTUIColor *configEmphasisColor = [_config emphasisColor];
+ 
+   // Cache the Strong color calculation to efficiently detect nested Strong nodes
+-  UIColor *strongColorToPreserve = [_config strongColor] ? [RenderContext calculateStrongColor:[_config strongColor]
++  RCTUIColor *strongColorToPreserve = [_config strongColor] ? [RenderContext calculateStrongColor:[_config strongColor]
+                                                                                     blockColor:blockStyle.color]
+                                                          : nil;
+ 
+@@ -55,7 +55,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+ 
+                         // 2. Color Optimization: Handle nesting and avoid redundant updates
+                         if (configEmphasisColor) {
+-                          UIColor *currentColor = attrs[NSForegroundColorAttributeName];
++                          RCTUIColor *currentColor = attrs[NSForegroundColorAttributeName];
+                           BOOL isLink = attrs[NSLinkAttributeName] != nil;
+ 
+                           // Verify if the current color belongs to a Strong parent
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/HeadingRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/HeadingRenderer.m
+index f1b1601..7983fab 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/HeadingRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/HeadingRenderer.m
+@@ -9,7 +9,7 @@
+ // Lightweight struct to hold style data without object overhead
+ typedef struct {
+   __unsafe_unretained UIFont *font;
+-  __unsafe_unretained UIColor *color;
++  __unsafe_unretained RCTUIColor *color;
+   CGFloat marginTop;
+   CGFloat marginBottom;
+   CGFloat lineHeight;
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m
+index f222b96..fc2d4aa 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m
+@@ -34,7 +34,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+ 
+   // 2. Extract configuration
+   NSString *url = node.attributes[@"url"] ?: @"";
+-  UIColor *linkColor = [_config linkColor];
++  RCTUIColor *linkColor = [_config linkColor];
+   NSNumber *underlineStyle = @([_config linkUnderline] ? NSUnderlineStyleSingle : NSUnderlineStyleNone);
+ 
+   // 3. Apply core link functionality (non-destructive)
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.h b/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.h
+index 1de097e..9bfdb6b 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.h
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.h
+@@ -1,5 +1,6 @@
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ typedef NS_ENUM(NSInteger, BlockType) {
+   BlockTypeNone,
+@@ -17,7 +18,7 @@ typedef NS_ENUM(NSInteger, ListType) { ListTypeUnordered, ListTypeOrdered };
+ @property (nonatomic, assign) CGFloat fontSize;
+ @property (nonatomic, strong) NSString *fontFamily;
+ @property (nonatomic, strong) NSString *fontWeight;
+-@property (nonatomic, strong) UIColor *color;
++@property (nonatomic, strong) RCTUIColor *color;
+ @property (nonatomic, strong) UIFont *cachedFont;
+ @property (nonatomic, strong) NSDictionary *cachedTextAttributes;
+ @end
+@@ -61,14 +62,14 @@ typedef NS_ENUM(NSInteger, ListType) { ListTypeUnordered, ListTypeOrdered };
+              fontSize:(CGFloat)fontSize
+            fontFamily:(NSString *)fontFamily
+            fontWeight:(NSString *)fontWeight
+-                color:(UIColor *)color;
++                color:(RCTUIColor *)color;
+ - (void)setBlockStyle:(BlockType)type
+              fontSize:(CGFloat)fontSize
+            fontFamily:(NSString *)fontFamily
+            fontWeight:(NSString *)fontWeight
+-                color:(UIColor *)color
++                color:(RCTUIColor *)color
+          headingLevel:(NSInteger)headingLevel;
+-- (void)setBlockStyle:(BlockType)type font:(UIFont *)font color:(UIColor *)color headingLevel:(NSInteger)headingLevel;
++- (void)setBlockStyle:(BlockType)type font:(UIFont *)font color:(RCTUIColor *)color headingLevel:(NSInteger)headingLevel;
+ - (BlockStyle *)getBlockStyle;
+ - (NSDictionary *)getTextAttributes;
+ - (void)clearBlockStyle;
+@@ -84,7 +85,7 @@ typedef NS_ENUM(NSInteger, ListType) { ListTypeUnordered, ListTypeOrdered };
+  * Calculates the color that strong would use based on the configured strong color and block style.
+  * Uses strongColor if explicitly set (different from block color), otherwise uses block color.
+  */
+-+ (UIColor *)calculateStrongColor:(UIColor *)configStrongColor blockColor:(UIColor *)blockColor;
+++ (RCTUIColor *)calculateStrongColor:(RCTUIColor *)configStrongColor blockColor:(RCTUIColor *)blockColor;
+ 
+ /**
+  * Calculates the range for content rendered between start and current output length.
+@@ -99,7 +100,7 @@ typedef NS_ENUM(NSInteger, ListType) { ListTypeUnordered, ListTypeOrdered };
+ + (BOOL)applyFontAndColorAttributes:(NSMutableAttributedString *)output
+                               range:(NSRange)range
+                                font:(UIFont *)font
+-                              color:(UIColor *)color
++                              color:(RCTUIColor *)color
+                  existingAttributes:(NSDictionary *)existingAttributes
+                shouldPreserveColors:(BOOL)shouldPreserveColors;
+ @end
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.m b/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.m
+index 17138e9..f9a83d1 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/RenderContext.m
+@@ -153,7 +153,7 @@ - (void)setBlockStyle:(BlockType)type
+              fontSize:(CGFloat)fontSize
+            fontFamily:(NSString *)fontFamily
+            fontWeight:(NSString *)fontWeight
+-                color:(UIColor *)color
++                color:(RCTUIColor *)color
+          headingLevel:(NSInteger)headingLevel
+ {
+   _currentBlockType = type;
+@@ -162,24 +162,24 @@ - (void)setBlockStyle:(BlockType)type
+   _currentBlockStyle.fontSize = fontSize;
+   _currentBlockStyle.fontFamily = fontFamily ?: @"";
+   _currentBlockStyle.fontWeight = fontWeight ?: @"normal";
+-  _currentBlockStyle.color = color ?: [UIColor blackColor];
++  _currentBlockStyle.color = color ?: [RCTUIColor blackColor];
+ }
+ 
+ - (void)setBlockStyle:(BlockType)type
+              fontSize:(CGFloat)fontSize
+            fontFamily:(NSString *)fontFamily
+            fontWeight:(NSString *)fontWeight
+-                color:(UIColor *)color
++                color:(RCTUIColor *)color
+ {
+   [self setBlockStyle:type fontSize:fontSize fontFamily:fontFamily fontWeight:fontWeight color:color headingLevel:0];
+ }
+ 
+-- (void)setBlockStyle:(BlockType)type font:(UIFont *)font color:(UIColor *)color headingLevel:(NSInteger)headingLevel
++- (void)setBlockStyle:(BlockType)type font:(UIFont *)font color:(RCTUIColor *)color headingLevel:(NSInteger)headingLevel
+ {
+   _currentBlockType = type;
+   _currentHeadingLevel = headingLevel;
+ 
+-  UIColor *finalColor = color ?: [UIColor blackColor];
++  RCTUIColor *finalColor = color ?: [RCTUIColor blackColor];
+   _currentBlockStyle.cachedFont = font;
+   _currentBlockStyle.color = finalColor;
+ 
+@@ -209,7 +209,7 @@ - (NSDictionary *)getTextAttributes
+   if (!font) {
+     font = [self cachedFontForSize:style.fontSize family:style.fontFamily weight:style.fontWeight];
+   }
+-  UIColor *color = style.color ?: [UIColor blackColor];
++  RCTUIColor *color = style.color ?: [RCTUIColor blackColor];
+ 
+   // Cache for future calls within same block
+   style.cachedTextAttributes = @{NSFontAttributeName : font, NSForegroundColorAttributeName : color};
+@@ -250,7 +250,7 @@ - (void)reset
+   _currentBlockStyle.fontSize = 0;
+   _currentBlockStyle.fontFamily = @"";
+   _currentBlockStyle.fontWeight = @"";
+-  _currentBlockStyle.color = [UIColor blackColor];
++  _currentBlockStyle.color = [RCTUIColor blackColor];
+ }
+ 
+ #pragma mark - Static Utilities
+@@ -266,7 +266,7 @@ + (BOOL)shouldPreserveColors:(NSDictionary *)attrs
+ /**
+  * Calculates whether a strong color should override the block color.
+  */
+-+ (UIColor *)calculateStrongColor:(UIColor *)configStrongColor blockColor:(UIColor *)blockColor
+++ (RCTUIColor *)calculateStrongColor:(RCTUIColor *)configStrongColor blockColor:(RCTUIColor *)blockColor
+ {
+   if (!configStrongColor || [configStrongColor isEqual:blockColor]) {
+     return blockColor;
+@@ -291,7 +291,7 @@ + (NSRange)rangeForRenderedContent:(NSMutableAttributedString *)output start:(NS
+ + (void)applyFontAndColorAttributes:(NSMutableAttributedString *)output
+                               range:(NSRange)range
+                                font:(UIFont *)font
+-                              color:(UIColor *)color
++                              color:(RCTUIColor *)color
+                  existingAttributes:(NSDictionary *)attrs
+                shouldPreserveColors:(BOOL)shouldPreserve
+ {
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/StrikethroughRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/StrikethroughRenderer.m
+index 6428eb3..a4b653c 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/StrikethroughRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/StrikethroughRenderer.m
+@@ -33,7 +33,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+   [output addAttribute:NSStrikethroughStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+ 
+   // Apply strikethrough line color (not text color)
+-  UIColor *strikethroughColor = [_config strikethroughColor];
++  RCTUIColor *strikethroughColor = [_config strikethroughColor];
+   [output addAttribute:NSStrikethroughColorAttributeName value:strikethroughColor range:range];
+ }
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/StrongRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/StrongRenderer.m
+index 0a516ff..63c3e77 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/StrongRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/StrongRenderer.m
+@@ -31,8 +31,8 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+     return;
+ 
+   BlockStyle *blockStyle = [context getBlockStyle];
+-  UIColor *configStrongColor = [_config strongColor];
+-  UIColor *calculatedColor =
++  RCTUIColor *configStrongColor = [_config strongColor];
++  RCTUIColor *calculatedColor =
+       configStrongColor ? [RenderContext calculateStrongColor:configStrongColor blockColor:blockStyle.color] : nil;
+ 
+   [output enumerateAttributesInRange:range
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/ThematicBreakRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/ThematicBreakRenderer.m
+index be5ad48..a5ec1f2 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/ThematicBreakRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/ThematicBreakRenderer.m
+@@ -25,7 +25,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+   [self ensureStartingNewline:output];
+ 
+   ThematicBreakAttachment *attachment = [[ThematicBreakAttachment alloc] init];
+-  attachment.lineColor = _config.thematicBreakColor ?: [UIColor separatorColor];
++  attachment.lineColor = _config.thematicBreakColor ?: [RCTUIColor separatorColor];
+   attachment.lineHeight = _config.thematicBreakHeight > 0 ? _config.thematicBreakHeight : 1.0;
+   attachment.marginTop = _config.thematicBreakMarginTop;
+   attachment.marginBottom = _config.thematicBreakMarginBottom;
+diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/UnderlineRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/UnderlineRenderer.m
+index a5d2009..7bceb53 100644
+--- a/node_modules/react-native-enriched-markdown/ios/renderer/UnderlineRenderer.m
++++ b/node_modules/react-native-enriched-markdown/ios/renderer/UnderlineRenderer.m
+@@ -31,7 +31,7 @@ - (void)renderNode:(MarkdownASTNode *)node into:(NSMutableAttributedString *)out
+ 
+   [output addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+ 
+-  UIColor *underlineColor = [_config underlineColor];
++  RCTUIColor *underlineColor = [_config underlineColor];
+ 
+   [output addAttribute:NSUnderlineColorAttributeName value:underlineColor range:range];
+ }
+diff --git a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h
+index 1b19bb6..bbdc18f 100644
+--- a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h
++++ b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface StyleConfig : NSObject <NSCopying>
+ - (instancetype)init;
+@@ -8,8 +9,8 @@
+ - (CGFloat)maxFontSizeMultiplier;
+ - (void)setMaxFontSizeMultiplier:(CGFloat)newValue;
+ // Primary font properties
+-- (UIColor *)primaryColor;
+-- (void)setPrimaryColor:(UIColor *)newValue;
++- (RCTUIColor *)primaryColor;
++- (void)setPrimaryColor:(RCTUIColor *)newValue;
+ - (NSNumber *)primaryFontSize;
+ - (void)setPrimaryFontSize:(NSNumber *)newValue;
+ - (NSString *)primaryFontWeight;
+@@ -24,8 +25,8 @@
+ - (void)setParagraphFontFamily:(NSString *)newValue;
+ - (NSString *)paragraphFontWeight;
+ - (void)setParagraphFontWeight:(NSString *)newValue;
+-- (UIColor *)paragraphColor;
+-- (void)setParagraphColor:(UIColor *)newValue;
++- (RCTUIColor *)paragraphColor;
++- (void)setParagraphColor:(RCTUIColor *)newValue;
+ - (CGFloat)paragraphMarginTop;
+ - (void)setParagraphMarginTop:(CGFloat)newValue;
+ - (CGFloat)paragraphMarginBottom;
+@@ -42,8 +43,8 @@
+ - (void)setH1FontFamily:(NSString *)newValue;
+ - (NSString *)h1FontWeight;
+ - (void)setH1FontWeight:(NSString *)newValue;
+-- (UIColor *)h1Color;
+-- (void)setH1Color:(UIColor *)newValue;
++- (RCTUIColor *)h1Color;
++- (void)setH1Color:(RCTUIColor *)newValue;
+ - (CGFloat)h1MarginTop;
+ - (void)setH1MarginTop:(CGFloat)newValue;
+ - (CGFloat)h1MarginBottom;
+@@ -60,8 +61,8 @@
+ - (void)setH2FontFamily:(NSString *)newValue;
+ - (NSString *)h2FontWeight;
+ - (void)setH2FontWeight:(NSString *)newValue;
+-- (UIColor *)h2Color;
+-- (void)setH2Color:(UIColor *)newValue;
++- (RCTUIColor *)h2Color;
++- (void)setH2Color:(RCTUIColor *)newValue;
+ - (CGFloat)h2MarginTop;
+ - (void)setH2MarginTop:(CGFloat)newValue;
+ - (CGFloat)h2MarginBottom;
+@@ -78,8 +79,8 @@
+ - (void)setH3FontFamily:(NSString *)newValue;
+ - (NSString *)h3FontWeight;
+ - (void)setH3FontWeight:(NSString *)newValue;
+-- (UIColor *)h3Color;
+-- (void)setH3Color:(UIColor *)newValue;
++- (RCTUIColor *)h3Color;
++- (void)setH3Color:(RCTUIColor *)newValue;
+ - (CGFloat)h3MarginTop;
+ - (void)setH3MarginTop:(CGFloat)newValue;
+ - (CGFloat)h3MarginBottom;
+@@ -96,8 +97,8 @@
+ - (void)setH4FontFamily:(NSString *)newValue;
+ - (NSString *)h4FontWeight;
+ - (void)setH4FontWeight:(NSString *)newValue;
+-- (UIColor *)h4Color;
+-- (void)setH4Color:(UIColor *)newValue;
++- (RCTUIColor *)h4Color;
++- (void)setH4Color:(RCTUIColor *)newValue;
+ - (CGFloat)h4MarginTop;
+ - (void)setH4MarginTop:(CGFloat)newValue;
+ - (CGFloat)h4MarginBottom;
+@@ -114,8 +115,8 @@
+ - (void)setH5FontFamily:(NSString *)newValue;
+ - (NSString *)h5FontWeight;
+ - (void)setH5FontWeight:(NSString *)newValue;
+-- (UIColor *)h5Color;
+-- (void)setH5Color:(UIColor *)newValue;
++- (RCTUIColor *)h5Color;
++- (void)setH5Color:(RCTUIColor *)newValue;
+ - (CGFloat)h5MarginTop;
+ - (void)setH5MarginTop:(CGFloat)newValue;
+ - (CGFloat)h5MarginBottom;
+@@ -132,8 +133,8 @@
+ - (void)setH6FontFamily:(NSString *)newValue;
+ - (NSString *)h6FontWeight;
+ - (void)setH6FontWeight:(NSString *)newValue;
+-- (UIColor *)h6Color;
+-- (void)setH6Color:(UIColor *)newValue;
++- (RCTUIColor *)h6Color;
++- (void)setH6Color:(RCTUIColor *)newValue;
+ - (CGFloat)h6MarginTop;
+ - (void)setH6MarginTop:(CGFloat)newValue;
+ - (CGFloat)h6MarginBottom;
+@@ -144,29 +145,29 @@
+ - (void)setH6TextAlign:(NSTextAlignment)newValue;
+ - (UIFont *)h6Font;
+ // Link properties
+-- (UIColor *)linkColor;
+-- (void)setLinkColor:(UIColor *)newValue;
++- (RCTUIColor *)linkColor;
++- (void)setLinkColor:(RCTUIColor *)newValue;
+ - (BOOL)linkUnderline;
+ - (void)setLinkUnderline:(BOOL)newValue;
+ // Strong properties
+-- (UIColor *)strongColor;
+-- (void)setStrongColor:(UIColor *)newValue;
++- (RCTUIColor *)strongColor;
++- (void)setStrongColor:(RCTUIColor *)newValue;
+ // Emphasis properties
+-- (UIColor *)emphasisColor;
+-- (void)setEmphasisColor:(UIColor *)newValue;
++- (RCTUIColor *)emphasisColor;
++- (void)setEmphasisColor:(RCTUIColor *)newValue;
+ // Strikethrough properties
+-- (UIColor *)strikethroughColor;
+-- (void)setStrikethroughColor:(UIColor *)newValue;
++- (RCTUIColor *)strikethroughColor;
++- (void)setStrikethroughColor:(RCTUIColor *)newValue;
+ // Underline properties
+-- (UIColor *)underlineColor;
+-- (void)setUnderlineColor:(UIColor *)newValue;
++- (RCTUIColor *)underlineColor;
++- (void)setUnderlineColor:(RCTUIColor *)newValue;
+ // Code properties
+-- (UIColor *)codeColor;
+-- (void)setCodeColor:(UIColor *)newValue;
+-- (UIColor *)codeBackgroundColor;
+-- (void)setCodeBackgroundColor:(UIColor *)newValue;
+-- (UIColor *)codeBorderColor;
+-- (void)setCodeBorderColor:(UIColor *)newValue;
++- (RCTUIColor *)codeColor;
++- (void)setCodeColor:(RCTUIColor *)newValue;
++- (RCTUIColor *)codeBackgroundColor;
++- (void)setCodeBackgroundColor:(RCTUIColor *)newValue;
++- (RCTUIColor *)codeBorderColor;
++- (void)setCodeBorderColor:(RCTUIColor *)newValue;
+ // Image properties
+ - (CGFloat)imageHeight;
+ - (void)setImageHeight:(CGFloat)newValue;
+@@ -186,8 +187,8 @@
+ - (void)setBlockquoteFontFamily:(NSString *)newValue;
+ - (NSString *)blockquoteFontWeight;
+ - (void)setBlockquoteFontWeight:(NSString *)newValue;
+-- (UIColor *)blockquoteColor;
+-- (void)setBlockquoteColor:(UIColor *)newValue;
++- (RCTUIColor *)blockquoteColor;
++- (void)setBlockquoteColor:(RCTUIColor *)newValue;
+ - (CGFloat)blockquoteMarginTop;
+ - (void)setBlockquoteMarginTop:(CGFloat)newValue;
+ - (CGFloat)blockquoteMarginBottom;
+@@ -195,14 +196,14 @@
+ - (CGFloat)blockquoteLineHeight;
+ - (void)setBlockquoteLineHeight:(CGFloat)newValue;
+ - (UIFont *)blockquoteFont;
+-- (UIColor *)blockquoteBorderColor;
+-- (void)setBlockquoteBorderColor:(UIColor *)newValue;
++- (RCTUIColor *)blockquoteBorderColor;
++- (void)setBlockquoteBorderColor:(RCTUIColor *)newValue;
+ - (CGFloat)blockquoteBorderWidth;
+ - (void)setBlockquoteBorderWidth:(CGFloat)newValue;
+ - (CGFloat)blockquoteGapWidth;
+ - (void)setBlockquoteGapWidth:(CGFloat)newValue;
+-- (UIColor *)blockquoteBackgroundColor;
+-- (void)setBlockquoteBackgroundColor:(UIColor *)newValue;
++- (RCTUIColor *)blockquoteBackgroundColor;
++- (void)setBlockquoteBackgroundColor:(RCTUIColor *)newValue;
+ // List style properties (combined for both ordered and unordered lists)
+ - (CGFloat)listStyleFontSize;
+ - (void)setListStyleFontSize:(CGFloat)newValue;
+@@ -210,20 +211,20 @@
+ - (void)setListStyleFontFamily:(NSString *)newValue;
+ - (NSString *)listStyleFontWeight;
+ - (void)setListStyleFontWeight:(NSString *)newValue;
+-- (UIColor *)listStyleColor;
+-- (void)setListStyleColor:(UIColor *)newValue;
++- (RCTUIColor *)listStyleColor;
++- (void)setListStyleColor:(RCTUIColor *)newValue;
+ - (CGFloat)listStyleMarginTop;
+ - (void)setListStyleMarginTop:(CGFloat)newValue;
+ - (CGFloat)listStyleMarginBottom;
+ - (void)setListStyleMarginBottom:(CGFloat)newValue;
+ - (CGFloat)listStyleLineHeight;
+ - (void)setListStyleLineHeight:(CGFloat)newValue;
+-- (UIColor *)listStyleBulletColor;
+-- (void)setListStyleBulletColor:(UIColor *)newValue;
++- (RCTUIColor *)listStyleBulletColor;
++- (void)setListStyleBulletColor:(RCTUIColor *)newValue;
+ - (CGFloat)listStyleBulletSize;
+ - (void)setListStyleBulletSize:(CGFloat)newValue;
+-- (UIColor *)listStyleMarkerColor;
+-- (void)setListStyleMarkerColor:(UIColor *)newValue;
++- (RCTUIColor *)listStyleMarkerColor;
++- (void)setListStyleMarkerColor:(RCTUIColor *)newValue;
+ - (NSString *)listStyleMarkerFontWeight;
+ - (void)setListStyleMarkerFontWeight:(NSString *)newValue;
+ - (CGFloat)listStyleGapWidth;
+@@ -242,18 +243,18 @@
+ - (void)setCodeBlockFontFamily:(NSString *)newValue;
+ - (NSString *)codeBlockFontWeight;
+ - (void)setCodeBlockFontWeight:(NSString *)newValue;
+-- (UIColor *)codeBlockColor;
+-- (void)setCodeBlockColor:(UIColor *)newValue;
++- (RCTUIColor *)codeBlockColor;
++- (void)setCodeBlockColor:(RCTUIColor *)newValue;
+ - (CGFloat)codeBlockMarginTop;
+ - (void)setCodeBlockMarginTop:(CGFloat)newValue;
+ - (CGFloat)codeBlockMarginBottom;
+ - (void)setCodeBlockMarginBottom:(CGFloat)newValue;
+ - (CGFloat)codeBlockLineHeight;
+ - (void)setCodeBlockLineHeight:(CGFloat)newValue;
+-- (UIColor *)codeBlockBackgroundColor;
+-- (void)setCodeBlockBackgroundColor:(UIColor *)newValue;
+-- (UIColor *)codeBlockBorderColor;
+-- (void)setCodeBlockBorderColor:(UIColor *)newValue;
++- (RCTUIColor *)codeBlockBackgroundColor;
++- (void)setCodeBlockBackgroundColor:(RCTUIColor *)newValue;
++- (RCTUIColor *)codeBlockBorderColor;
++- (void)setCodeBlockBorderColor:(RCTUIColor *)newValue;
+ - (CGFloat)codeBlockBorderRadius;
+ - (void)setCodeBlockBorderRadius:(CGFloat)newValue;
+ - (CGFloat)codeBlockBorderWidth;
+@@ -262,8 +263,8 @@
+ - (void)setCodeBlockPadding:(CGFloat)newValue;
+ - (UIFont *)codeBlockFont;
+ // Thematic break properties
+-- (UIColor *)thematicBreakColor;
+-- (void)setThematicBreakColor:(UIColor *)newValue;
++- (RCTUIColor *)thematicBreakColor;
++- (void)setThematicBreakColor:(RCTUIColor *)newValue;
+ - (CGFloat)thematicBreakHeight;
+ - (void)setThematicBreakHeight:(CGFloat)newValue;
+ - (CGFloat)thematicBreakMarginTop;
+diff --git a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm
+index 8dd6752..bba6dc5 100644
+--- a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm
++++ b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm
+@@ -17,7 +17,7 @@ @implementation StyleConfig {
+   BOOL _allowFontScaling;
+   CGFloat _maxFontSizeMultiplier;
+   // Primary font properties
+-  UIColor *_primaryColor;
++  RCTUIColor *_primaryColor;
+   NSNumber *_primaryFontSize;
+   NSString *_primaryFontWeight;
+   NSString *_primaryFontFamily;
+@@ -27,7 +27,7 @@ @implementation StyleConfig {
+   CGFloat _paragraphFontSize;
+   NSString *_paragraphFontFamily;
+   NSString *_paragraphFontWeight;
+-  UIColor *_paragraphColor;
++  RCTUIColor *_paragraphColor;
+   CGFloat _paragraphMarginTop;
+   CGFloat _paragraphMarginBottom;
+   CGFloat _paragraphLineHeight;
+@@ -38,7 +38,7 @@ @implementation StyleConfig {
+   CGFloat _h1FontSize;
+   NSString *_h1FontFamily;
+   NSString *_h1FontWeight;
+-  UIColor *_h1Color;
++  RCTUIColor *_h1Color;
+   CGFloat _h1MarginTop;
+   CGFloat _h1MarginBottom;
+   CGFloat _h1LineHeight;
+@@ -49,7 +49,7 @@ @implementation StyleConfig {
+   CGFloat _h2FontSize;
+   NSString *_h2FontFamily;
+   NSString *_h2FontWeight;
+-  UIColor *_h2Color;
++  RCTUIColor *_h2Color;
+   CGFloat _h2MarginTop;
+   CGFloat _h2MarginBottom;
+   CGFloat _h2LineHeight;
+@@ -60,7 +60,7 @@ @implementation StyleConfig {
+   CGFloat _h3FontSize;
+   NSString *_h3FontFamily;
+   NSString *_h3FontWeight;
+-  UIColor *_h3Color;
++  RCTUIColor *_h3Color;
+   CGFloat _h3MarginTop;
+   CGFloat _h3MarginBottom;
+   CGFloat _h3LineHeight;
+@@ -71,7 +71,7 @@ @implementation StyleConfig {
+   CGFloat _h4FontSize;
+   NSString *_h4FontFamily;
+   NSString *_h4FontWeight;
+-  UIColor *_h4Color;
++  RCTUIColor *_h4Color;
+   CGFloat _h4MarginTop;
+   CGFloat _h4MarginBottom;
+   CGFloat _h4LineHeight;
+@@ -82,7 +82,7 @@ @implementation StyleConfig {
+   CGFloat _h5FontSize;
+   NSString *_h5FontFamily;
+   NSString *_h5FontWeight;
+-  UIColor *_h5Color;
++  RCTUIColor *_h5Color;
+   CGFloat _h5MarginTop;
+   CGFloat _h5MarginBottom;
+   CGFloat _h5LineHeight;
+@@ -93,7 +93,7 @@ @implementation StyleConfig {
+   CGFloat _h6FontSize;
+   NSString *_h6FontFamily;
+   NSString *_h6FontWeight;
+-  UIColor *_h6Color;
++  RCTUIColor *_h6Color;
+   CGFloat _h6MarginTop;
+   CGFloat _h6MarginBottom;
+   CGFloat _h6LineHeight;
+@@ -101,20 +101,20 @@ @implementation StyleConfig {
+   UIFont *_h6Font;
+   BOOL _h6FontNeedsRecreation;
+   // Link properties
+-  UIColor *_linkColor;
++  RCTUIColor *_linkColor;
+   BOOL _linkUnderline;
+   // Strong properties
+-  UIColor *_strongColor;
++  RCTUIColor *_strongColor;
+   // Emphasis properties
+-  UIColor *_emphasisColor;
++  RCTUIColor *_emphasisColor;
+   // Strikethrough properties
+-  UIColor *_strikethroughColor;
++  RCTUIColor *_strikethroughColor;
+   // Underline properties
+-  UIColor *_underlineColor;
++  RCTUIColor *_underlineColor;
+   // Code properties
+-  UIColor *_codeColor;
+-  UIColor *_codeBackgroundColor;
+-  UIColor *_codeBorderColor;
++  RCTUIColor *_codeColor;
++  RCTUIColor *_codeBackgroundColor;
++  RCTUIColor *_codeBorderColor;
+   // Image properties
+   CGFloat _imageHeight;
+   CGFloat _imageBorderRadius;
+@@ -126,25 +126,25 @@ @implementation StyleConfig {
+   CGFloat _blockquoteFontSize;
+   NSString *_blockquoteFontFamily;
+   NSString *_blockquoteFontWeight;
+-  UIColor *_blockquoteColor;
++  RCTUIColor *_blockquoteColor;
+   CGFloat _blockquoteMarginTop;
+   CGFloat _blockquoteMarginBottom;
+   CGFloat _blockquoteLineHeight;
+-  UIColor *_blockquoteBorderColor;
++  RCTUIColor *_blockquoteBorderColor;
+   CGFloat _blockquoteBorderWidth;
+   CGFloat _blockquoteGapWidth;
+-  UIColor *_blockquoteBackgroundColor;
++  RCTUIColor *_blockquoteBackgroundColor;
+   // List style properties (combined for both ordered and unordered lists)
+   CGFloat _listStyleFontSize;
+   NSString *_listStyleFontFamily;
+   NSString *_listStyleFontWeight;
+-  UIColor *_listStyleColor;
++  RCTUIColor *_listStyleColor;
+   CGFloat _listStyleMarginTop;
+   CGFloat _listStyleMarginBottom;
+   CGFloat _listStyleLineHeight;
+-  UIColor *_listStyleBulletColor;
++  RCTUIColor *_listStyleBulletColor;
+   CGFloat _listStyleBulletSize;
+-  UIColor *_listStyleMarkerColor;
++  RCTUIColor *_listStyleMarkerColor;
+   NSString *_listStyleMarkerFontWeight;
+   CGFloat _listStyleGapWidth;
+   CGFloat _listStyleMarginLeft;
+@@ -156,12 +156,12 @@ @implementation StyleConfig {
+   CGFloat _codeBlockFontSize;
+   NSString *_codeBlockFontFamily;
+   NSString *_codeBlockFontWeight;
+-  UIColor *_codeBlockColor;
++  RCTUIColor *_codeBlockColor;
+   CGFloat _codeBlockMarginTop;
+   CGFloat _codeBlockMarginBottom;
+   CGFloat _codeBlockLineHeight;
+-  UIColor *_codeBlockBackgroundColor;
+-  UIColor *_codeBlockBorderColor;
++  RCTUIColor *_codeBlockBackgroundColor;
++  RCTUIColor *_codeBlockBorderColor;
+   CGFloat _codeBlockBorderRadius;
+   CGFloat _codeBlockBorderWidth;
+   CGFloat _codeBlockPadding;
+@@ -170,7 +170,7 @@ @implementation StyleConfig {
+   UIFont *_blockquoteFont;
+   BOOL _blockquoteFontNeedsRecreation;
+   // Thematic break properties
+-  UIColor *_thematicBreakColor;
++  RCTUIColor *_thematicBreakColor;
+   CGFloat _thematicBreakHeight;
+   CGFloat _thematicBreakMarginTop;
+   CGFloat _thematicBreakMarginBottom;
+@@ -391,12 +391,12 @@ - (id)copyWithZone:(NSZone *)zone
+   return copy;
+ }
+ 
+-- (UIColor *)primaryColor
++- (RCTUIColor *)primaryColor
+ {
+-  return _primaryColor != nullptr ? _primaryColor : [UIColor blackColor];
++  return _primaryColor != nullptr ? _primaryColor : [RCTUIColor blackColor];
+ }
+ 
+-- (void)setPrimaryColor:(UIColor *)newValue
++- (void)setPrimaryColor:(RCTUIColor *)newValue
+ {
+   _primaryColor = newValue;
+ }
+@@ -483,12 +483,12 @@ - (void)setParagraphFontWeight:(NSString *)newValue
+   _paragraphFontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)paragraphColor
++- (RCTUIColor *)paragraphColor
+ {
+   return _paragraphColor;
+ }
+ 
+-- (void)setParagraphColor:(UIColor *)newValue
++- (void)setParagraphColor:(RCTUIColor *)newValue
+ {
+   _paragraphColor = newValue;
+ }
+@@ -584,12 +584,12 @@ - (void)setH1FontWeight:(NSString *)newValue
+   _h1FontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)h1Color
++- (RCTUIColor *)h1Color
+ {
+   return _h1Color;
+ }
+ 
+-- (void)setH1Color:(UIColor *)newValue
++- (void)setH1Color:(RCTUIColor *)newValue
+ {
+   _h1Color = newValue;
+ }
+@@ -685,12 +685,12 @@ - (void)setH2FontWeight:(NSString *)newValue
+   _h2FontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)h2Color
++- (RCTUIColor *)h2Color
+ {
+   return _h2Color;
+ }
+ 
+-- (void)setH2Color:(UIColor *)newValue
++- (void)setH2Color:(RCTUIColor *)newValue
+ {
+   _h2Color = newValue;
+ }
+@@ -786,12 +786,12 @@ - (void)setH3FontWeight:(NSString *)newValue
+   _h3FontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)h3Color
++- (RCTUIColor *)h3Color
+ {
+   return _h3Color;
+ }
+ 
+-- (void)setH3Color:(UIColor *)newValue
++- (void)setH3Color:(RCTUIColor *)newValue
+ {
+   _h3Color = newValue;
+ }
+@@ -887,12 +887,12 @@ - (void)setH4FontWeight:(NSString *)newValue
+   _h4FontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)h4Color
++- (RCTUIColor *)h4Color
+ {
+   return _h4Color;
+ }
+ 
+-- (void)setH4Color:(UIColor *)newValue
++- (void)setH4Color:(RCTUIColor *)newValue
+ {
+   _h4Color = newValue;
+ }
+@@ -988,12 +988,12 @@ - (void)setH5FontWeight:(NSString *)newValue
+   _h5FontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)h5Color
++- (RCTUIColor *)h5Color
+ {
+   return _h5Color;
+ }
+ 
+-- (void)setH5Color:(UIColor *)newValue
++- (void)setH5Color:(RCTUIColor *)newValue
+ {
+   _h5Color = newValue;
+ }
+@@ -1089,12 +1089,12 @@ - (void)setH6FontWeight:(NSString *)newValue
+   _h6FontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)h6Color
++- (RCTUIColor *)h6Color
+ {
+   return _h6Color;
+ }
+ 
+-- (void)setH6Color:(UIColor *)newValue
++- (void)setH6Color:(RCTUIColor *)newValue
+ {
+   _h6Color = newValue;
+ }
+@@ -1157,12 +1157,12 @@ - (UIFont *)h6Font
+   return _h6Font;
+ }
+ 
+-- (UIColor *)linkColor
++- (RCTUIColor *)linkColor
+ {
+   return _linkColor;
+ }
+ 
+-- (void)setLinkColor:(UIColor *)newValue
++- (void)setLinkColor:(RCTUIColor *)newValue
+ {
+   _linkColor = newValue;
+ }
+@@ -1177,72 +1177,72 @@ - (void)setLinkUnderline:(BOOL)newValue
+   _linkUnderline = newValue;
+ }
+ 
+-- (UIColor *)strongColor
++- (RCTUIColor *)strongColor
+ {
+   return _strongColor;
+ }
+ 
+-- (void)setStrongColor:(UIColor *)newValue
++- (void)setStrongColor:(RCTUIColor *)newValue
+ {
+   _strongColor = newValue;
+ }
+ 
+-- (UIColor *)emphasisColor
++- (RCTUIColor *)emphasisColor
+ {
+   return _emphasisColor;
+ }
+ 
+-- (void)setEmphasisColor:(UIColor *)newValue
++- (void)setEmphasisColor:(RCTUIColor *)newValue
+ {
+   _emphasisColor = newValue;
+ }
+ 
+-- (UIColor *)strikethroughColor
++- (RCTUIColor *)strikethroughColor
+ {
+   return _strikethroughColor;
+ }
+ 
+-- (void)setStrikethroughColor:(UIColor *)newValue
++- (void)setStrikethroughColor:(RCTUIColor *)newValue
+ {
+   _strikethroughColor = newValue;
+ }
+ 
+-- (UIColor *)underlineColor
++- (RCTUIColor *)underlineColor
+ {
+   return _underlineColor;
+ }
+ 
+-- (void)setUnderlineColor:(UIColor *)newValue
++- (void)setUnderlineColor:(RCTUIColor *)newValue
+ {
+   _underlineColor = newValue;
+ }
+ 
+-- (UIColor *)codeColor
++- (RCTUIColor *)codeColor
+ {
+   return _codeColor;
+ }
+ 
+-- (void)setCodeColor:(UIColor *)newValue
++- (void)setCodeColor:(RCTUIColor *)newValue
+ {
+   _codeColor = newValue;
+ }
+ 
+-- (UIColor *)codeBackgroundColor
++- (RCTUIColor *)codeBackgroundColor
+ {
+   return _codeBackgroundColor;
+ }
+ 
+-- (void)setCodeBackgroundColor:(UIColor *)newValue
++- (void)setCodeBackgroundColor:(RCTUIColor *)newValue
+ {
+   _codeBackgroundColor = newValue;
+ }
+ 
+-- (UIColor *)codeBorderColor
++- (RCTUIColor *)codeBorderColor
+ {
+   return _codeBorderColor;
+ }
+ 
+-- (void)setCodeBorderColor:(UIColor *)newValue
++- (void)setCodeBorderColor:(RCTUIColor *)newValue
+ {
+   _codeBorderColor = newValue;
+ }
+@@ -1331,12 +1331,12 @@ - (void)setBlockquoteFontWeight:(NSString *)newValue
+   _blockquoteFontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)blockquoteColor
++- (RCTUIColor *)blockquoteColor
+ {
+   return _blockquoteColor;
+ }
+ 
+-- (void)setBlockquoteColor:(UIColor *)newValue
++- (void)setBlockquoteColor:(RCTUIColor *)newValue
+ {
+   _blockquoteColor = newValue;
+ }
+@@ -1389,12 +1389,12 @@ - (UIFont *)blockquoteFont
+   return _blockquoteFont;
+ }
+ 
+-- (UIColor *)blockquoteBorderColor
++- (RCTUIColor *)blockquoteBorderColor
+ {
+   return _blockquoteBorderColor;
+ }
+ 
+-- (void)setBlockquoteBorderColor:(UIColor *)newValue
++- (void)setBlockquoteBorderColor:(RCTUIColor *)newValue
+ {
+   _blockquoteBorderColor = newValue;
+ }
+@@ -1419,12 +1419,12 @@ - (void)setBlockquoteGapWidth:(CGFloat)newValue
+   _blockquoteGapWidth = newValue;
+ }
+ 
+-- (UIColor *)blockquoteBackgroundColor
++- (RCTUIColor *)blockquoteBackgroundColor
+ {
+   return _blockquoteBackgroundColor;
+ }
+ 
+-- (void)setBlockquoteBackgroundColor:(UIColor *)newValue
++- (void)setBlockquoteBackgroundColor:(RCTUIColor *)newValue
+ {
+   _blockquoteBackgroundColor = newValue;
+ }
+@@ -1465,12 +1465,12 @@ - (void)setListStyleFontWeight:(NSString *)newValue
+   _listStyleFontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)listStyleColor
++- (RCTUIColor *)listStyleColor
+ {
+   return _listStyleColor;
+ }
+ 
+-- (void)setListStyleColor:(UIColor *)newValue
++- (void)setListStyleColor:(RCTUIColor *)newValue
+ {
+   _listStyleColor = newValue;
+ }
+@@ -1508,12 +1508,12 @@ - (void)setListStyleLineHeight:(CGFloat)newValue
+   _listStyleLineHeight = newValue;
+ }
+ 
+-- (UIColor *)listStyleBulletColor
++- (RCTUIColor *)listStyleBulletColor
+ {
+   return _listStyleBulletColor;
+ }
+ 
+-- (void)setListStyleBulletColor:(UIColor *)newValue
++- (void)setListStyleBulletColor:(RCTUIColor *)newValue
+ {
+   _listStyleBulletColor = newValue;
+ }
+@@ -1528,12 +1528,12 @@ - (void)setListStyleBulletSize:(CGFloat)newValue
+   _listStyleBulletSize = newValue;
+ }
+ 
+-- (UIColor *)listStyleMarkerColor
++- (RCTUIColor *)listStyleMarkerColor
+ {
+   return _listStyleMarkerColor;
+ }
+ 
+-- (void)setListStyleMarkerColor:(UIColor *)newValue
++- (void)setListStyleMarkerColor:(RCTUIColor *)newValue
+ {
+   _listStyleMarkerColor = newValue;
+ }
+@@ -1654,12 +1654,12 @@ - (void)setCodeBlockFontWeight:(NSString *)newValue
+   _codeBlockFontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)codeBlockColor
++- (RCTUIColor *)codeBlockColor
+ {
+   return _codeBlockColor;
+ }
+ 
+-- (void)setCodeBlockColor:(UIColor *)newValue
++- (void)setCodeBlockColor:(RCTUIColor *)newValue
+ {
+   _codeBlockColor = newValue;
+ }
+@@ -1697,22 +1697,22 @@ - (void)setCodeBlockLineHeight:(CGFloat)newValue
+   _codeBlockLineHeight = newValue;
+ }
+ 
+-- (UIColor *)codeBlockBackgroundColor
++- (RCTUIColor *)codeBlockBackgroundColor
+ {
+   return _codeBlockBackgroundColor;
+ }
+ 
+-- (void)setCodeBlockBackgroundColor:(UIColor *)newValue
++- (void)setCodeBlockBackgroundColor:(RCTUIColor *)newValue
+ {
+   _codeBlockBackgroundColor = newValue;
+ }
+ 
+-- (UIColor *)codeBlockBorderColor
++- (RCTUIColor *)codeBlockBorderColor
+ {
+   return _codeBlockBorderColor;
+ }
+ 
+-- (void)setCodeBlockBorderColor:(UIColor *)newValue
++- (void)setCodeBlockBorderColor:(RCTUIColor *)newValue
+ {
+   _codeBlockBorderColor = newValue;
+ }
+@@ -1763,12 +1763,12 @@ - (UIFont *)codeBlockFont
+ }
+ 
+ // Thematic break properties
+-- (UIColor *)thematicBreakColor
++- (RCTUIColor *)thematicBreakColor
+ {
+   return _thematicBreakColor;
+ }
+ 
+-- (void)setThematicBreakColor:(UIColor *)newValue
++- (void)setThematicBreakColor:(RCTUIColor *)newValue
+ {
+   _thematicBreakColor = newValue;
+ }
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.h b/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.h
+index b0c0fbb..c7f5258 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #import "StyleConfig.h"
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.m b/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.m
+index c7c61ee..8d9f6fe 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/BlockquoteBorder.m
+@@ -1,5 +1,6 @@
+ #import "BlockquoteBorder.h"
+ #import "StyleConfig.h"
++#include <TargetConditionals.h>
+ 
+ // Attribute constants for identifying blockquote segments in text storage
+ NSString *const BlockquoteDepthAttributeName = @"BlockquoteDepth";
+@@ -37,8 +38,8 @@ - (void)drawBordersForGlyphRange:(NSRange)glyphsToShow
+   CGFloat gapWidth = c.blockquoteGapWidth;
+   CGFloat levelSpacing = borderWidth + gapWidth;
+   CGFloat containerWidth = textContainer.size.width;
+-  UIColor *defaultBgColor = c.blockquoteBackgroundColor;
+-  UIColor *borderColor = c.blockquoteBorderColor;
++  RCTUIColor *defaultBgColor = c.blockquoteBackgroundColor;
++  RCTUIColor *borderColor = c.blockquoteBorderColor;
+ 
+   // Use a Bezier path to batch all vertical border rectangles into a single GPU draw call
+   UIBezierPath *borderPath = [UIBezierPath bezierPath];
+@@ -68,17 +69,20 @@ - (void)drawBordersForGlyphRange:(NSRange)glyphsToShow
+                                  CGFloat baseY = origin.y + rect.origin.y;
+ 
+                                  // 1. Draw Background (Painter's algorithm: draw backgrounds before borders)
+-                                 UIColor *bgColor = attrs[BlockquoteBackgroundColorAttributeName] ?: defaultBgColor;
+-                                 if (bgColor && bgColor != [UIColor clearColor]) {
++                                 RCTUIColor *bgColor = attrs[BlockquoteBackgroundColorAttributeName] ?: defaultBgColor;
++                                 if (bgColor && bgColor != [RCTUIColor clearColor]) {
+                                    [bgColor setFill];
+-                                   UIRectFill(CGRectMake(origin.x, baseY, containerWidth, rect.size.height));
++                                   CGContextRef context = UIGraphicsGetCurrentContext();
++                                   if (context != NULL) {
++                                     CGContextFillRect(context, CGRectMake(origin.x, baseY, containerWidth, rect.size.height));
++                                   }
+                                  }
+ 
+                                  // 2. Aggregate vertical borders into the batch path
+                                  for (NSInteger level = 0; level <= depth; level++) {
+                                    CGFloat borderX = origin.x + (levelSpacing * level);
+                                    CGRect borderRect = CGRectMake(borderX, baseY, borderWidth, rect.size.height);
+-                                   [borderPath appendPath:[UIBezierPath bezierPathWithRect:borderRect]];
++                                   UIBezierPathAppendPath(borderPath, [UIBezierPath bezierPathWithRect:borderRect]);
+                                  }
+                                }];
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.h b/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.h
+index b083468..fb4134b 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #import "StyleConfig.h"
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.m b/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.m
+index 668f416..8ffd6dd 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/CodeBackground.m
+@@ -1,5 +1,6 @@
+ #import "CodeBackground.h"
+ #import "RenderContext.h"
++#include <TargetConditionals.h>
+ 
+ NSString *const CodeAttributeName = @"Code";
+ 
+@@ -24,7 +25,7 @@ - (void)drawBackgroundsForGlyphRange:(NSRange)glyphsToShow
+                        textContainer:(NSTextContainer *)textContainer
+                              atPoint:(CGPoint)origin
+ {
+-  UIColor *backgroundColor = _config.codeBackgroundColor;
++  RCTUIColor *backgroundColor = _config.codeBackgroundColor;
+   if (!backgroundColor)
+     return;
+ 
+@@ -55,8 +56,8 @@ - (void)drawCodeBackgroundForRange:(NSRange)range
+                      layoutManager:(NSLayoutManager *)layoutManager
+                      textContainer:(NSTextContainer *)textContainer
+                            atPoint:(CGPoint)origin
+-                   backgroundColor:(UIColor *)backgroundColor
+-                       borderColor:(UIColor *)borderColor
++                   backgroundColor:(RCTUIColor *)backgroundColor
++                       borderColor:(RCTUIColor *)borderColor
+ {
+   NSRange glyphRange = [layoutManager glyphRangeForCharacterRange:range actualCharacterRange:NULL];
+   if (glyphRange.location == NSNotFound || glyphRange.length == 0)
+@@ -110,8 +111,8 @@ - (void)drawCodeBackgroundForRange:(NSRange)range
+ #pragma mark - Drawing Logic
+ 
+ - (void)drawBackgroundAndBorders:(CGRect)rect
+-                 backgroundColor:(UIColor *)backgroundColor
+-                     borderColor:(UIColor *)borderColor
++                 backgroundColor:(RCTUIColor *)backgroundColor
++                     borderColor:(RCTUIColor *)borderColor
+                          isFirst:(BOOL)isFirst
+                           isLast:(BOOL)isLast
+ {
+@@ -124,14 +125,23 @@ - (void)drawBackgroundAndBorders:(CGRect)rect
+     UIBezierPath *strokePath =
+         (isFirst && isLast) ? path : [self openBorderPathForRect:rect isFirst:isFirst isLast:isLast];
+     strokePath.lineWidth = kCodeBackgroundBorderWidth;
++#if TARGET_OS_OSX
++    strokePath.lineCapStyle = NSLineCapStyleRound;
++    strokePath.lineJoinStyle = NSLineJoinStyleRound;
++#else
+     strokePath.lineCapStyle = kCGLineCapRound;
+     strokePath.lineJoinStyle = kCGLineJoinRound;
++#endif
+     [strokePath stroke];
+   }
+ }
+ 
+ - (UIBezierPath *)pathForRect:(CGRect)rect isFirst:(BOOL)isFirst isLast:(BOOL)isLast
+ {
++#if TARGET_OS_OSX
++  CGFloat radius = (isFirst || isLast) ? kCodeBackgroundCornerRadius : 0;
++  return UIBezierPathWithRoundedRect(rect, radius);
++#else
+   UIRectCorner corners = 0;
+   if (isFirst)
+     corners |= (UIRectCornerTopLeft | UIRectCornerBottomLeft);
+@@ -141,10 +151,34 @@ - (UIBezierPath *)pathForRect:(CGRect)rect isFirst:(BOOL)isFirst isLast:(BOOL)is
+   return [UIBezierPath bezierPathWithRoundedRect:rect
+                                byRoundingCorners:corners
+                                      cornerRadii:CGSizeMake(kCodeBackgroundCornerRadius, kCodeBackgroundCornerRadius)];
++#endif
+ }
+ 
+ - (UIBezierPath *)openBorderPathForRect:(CGRect)rect isFirst:(BOOL)isFirst isLast:(BOOL)isLast
+ {
++#if TARGET_OS_OSX
++  CGFloat inset = kCodeBackgroundBorderWidth / 2.0;
++  CGRect insetRect = CGRectInset(rect, inset, inset);
++  UIBezierPath *path = [UIBezierPath bezierPath];
++
++  if (isFirst) {
++    [path moveToPoint:CGPointMake(CGRectGetMaxX(rect), insetRect.origin.y)];
++    [path lineToPoint:CGPointMake(insetRect.origin.x, insetRect.origin.y)];
++    [path lineToPoint:CGPointMake(insetRect.origin.x, CGRectGetMaxY(insetRect))];
++    [path lineToPoint:CGPointMake(CGRectGetMaxX(rect), CGRectGetMaxY(insetRect))];
++  } else if (isLast) {
++    [path moveToPoint:CGPointMake(rect.origin.x, insetRect.origin.y)];
++    [path lineToPoint:CGPointMake(CGRectGetMaxX(insetRect), insetRect.origin.y)];
++    [path lineToPoint:CGPointMake(CGRectGetMaxX(insetRect), CGRectGetMaxY(insetRect))];
++    [path lineToPoint:CGPointMake(rect.origin.x, CGRectGetMaxY(insetRect))];
++  } else {
++    [path moveToPoint:CGPointMake(rect.origin.x, insetRect.origin.y)];
++    [path lineToPoint:CGPointMake(CGRectGetMaxX(rect), insetRect.origin.y)];
++    [path moveToPoint:CGPointMake(rect.origin.x, CGRectGetMaxY(insetRect))];
++    [path lineToPoint:CGPointMake(CGRectGetMaxX(rect), CGRectGetMaxY(insetRect))];
++  }
++  return path;
++#else
+   UIBezierPath *path = [UIBezierPath bezierPath];
+   CGFloat r = kCodeBackgroundCornerRadius;
+   CGFloat inset = kCodeBackgroundBorderWidth / 2.0;
+@@ -175,6 +209,7 @@ - (UIBezierPath *)openBorderPathForRect:(CGRect)rect isFirst:(BOOL)isFirst isLas
+     [path addLineToPoint:CGPointMake(CGRectGetMaxX(rect), CGRectGetMaxY(insetRect))];
+   }
+   return path;
++#endif
+ }
+ 
+ #pragma mark - Helpers
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.h b/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.h
+index fb899db..3d70ce5 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #import "StyleConfig.h"
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.m b/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.m
+index c54ce1c..76de6e0 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/CodeBlockBackground.m
+@@ -62,7 +62,7 @@ - (void)drawCodeBlockBackgroundForRange:(NSRange)range
+   CGFloat inset = borderWidth / 2.0;
+ 
+   CGRect insetRect = CGRectInset(blockRect, inset, inset);
+-  UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:insetRect cornerRadius:MAX(0, borderRadius - inset)];
++  UIBezierPath *path = UIBezierPathWithRoundedRect(insetRect, MAX(0, borderRadius - inset));
+ 
+   CGContextRef ctx = UIGraphicsGetCurrentContext();
+   CGContextSaveGState(ctx);
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.h b/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.h
+index 876fe81..eabb292 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
++#include <TargetConditionals.h>
+ 
+ @class StyleConfig;
+ 
+@@ -11,9 +13,14 @@ extern "C" {
+ #endif
+ 
+ /// Builds edit menu with enhanced Copy (RTF/HTML/Markdown) and optional "Copy as Markdown"/"Copy Image URL".
++#if TARGET_OS_OSX
++id _Nullable buildEditMenuForSelection(NSAttributedString *attributedText, NSRange range, NSString *_Nullable cachedMarkdown,
++                                       StyleConfig *styleConfig, NSArray *suggestedActions);
++#else
+ UIMenu *buildEditMenuForSelection(NSAttributedString *attributedText, NSRange range, NSString *_Nullable cachedMarkdown,
+                                   StyleConfig *styleConfig, NSArray<UIMenuElement *> *suggestedActions)
+     API_AVAILABLE(ios(16.0));
++#endif
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.m b/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.m
+index 64a0a2f..faef2fe 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/EditMenuUtils.m
+@@ -1,7 +1,18 @@
+ #import "EditMenuUtils.h"
+ #import "PasteboardUtils.h"
+ #import "StyleConfig.h"
+-#import <UIKit/UIPasteboard.h>
++#import <React/RCTUIKit.h>
++#include <TargetConditionals.h>
++
++#if TARGET_OS_OSX
++
++id _Nullable buildEditMenuForSelection(NSAttributedString *attributedText, NSRange range, NSString *_Nullable cachedMarkdown,
++                                       StyleConfig *styleConfig, NSArray *suggestedActions)
++{
++  return nil;
++}
++
++#else
+ 
+ static NSString *const kMenuIdentifierStandardEdit = @"com.apple.menu.standard-edit";
+ static NSString *const kActionIdentifierCopy = @"com.swmansion.enriched.markdown.copy";
+@@ -13,7 +24,7 @@
+ static UIAction *createCopyAction(NSAttributedString *selectedText, NSString *markdown, StyleConfig *styleConfig)
+ {
+   return [UIAction actionWithTitle:@"Copy"
+-                             image:[UIImage systemImageNamed:@"doc.on.doc"]
++                             image:[RCTUIImage systemImageNamed:@"doc.on.doc"]
+                         identifier:kActionIdentifierCopy
+                            handler:^(__kindof UIAction *action) {
+                              copyAttributedStringToPasteboard(selectedText, markdown, styleConfig);
+@@ -27,7 +38,7 @@
+ 
+   return [UIAction
+       actionWithTitle:@"Copy as Markdown"
+-                image:[UIImage systemImageNamed:@"doc.text"]
++                image:[RCTUIImage systemImageNamed:@"doc.text"]
+            identifier:kActionIdentifierCopyMarkdown
+               handler:^(__kindof UIAction *action) { [[UIPasteboard generalPasteboard] setString:markdown]; }];
+ }
+@@ -44,7 +55,7 @@
+ 
+   return [UIAction
+       actionWithTitle:title
+-                image:[UIImage systemImageNamed:@"link"]
++                image:[RCTUIImage systemImageNamed:@"link"]
+            identifier:kActionIdentifierCopyImageURL
+               handler:^(__kindof UIAction *action) { [[UIPasteboard generalPasteboard] setString:urlsToCopy]; }];
+ }
+@@ -116,3 +127,5 @@ static void insertOptionalAction(NSMutableArray<UIMenuElement *> *array, UIActio
+ 
+   return [UIMenu menuWithChildren:result];
+ }
++
++#endif
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/FontUtils.h b/node_modules/react-native-enriched-markdown/ios/utils/FontUtils.h
+index 5b21036..9e4017a 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/FontUtils.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/FontUtils.h
+@@ -1,5 +1,6 @@
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @class BlockStyle;
+ @class RenderContext;
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.h b/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.h
+index 4323812..36c6b9d 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @class StyleConfig;
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m b/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m
+index bac1120..d2ed874 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m
+@@ -134,7 +134,7 @@ - (instancetype)init
+ 
+ #pragma mark - Color Conversion
+ 
+-static NSString *colorToCSS(UIColor *color)
++static NSString *colorToCSS(RCTUIColor *color)
+ {
+   if (!color)
+     return @"inherit";
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/LastElementUtils.h b/node_modules/react-native-enriched-markdown/ios/utils/LastElementUtils.h
+index e635bd1..eb72303 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/LastElementUtils.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/LastElementUtils.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.h b/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.h
+index 97ff1e5..bc49470 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.h
+@@ -1,5 +1,6 @@
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @class StyleConfig;
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.m b/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.m
+index ffcf4d4..baef1b3 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/ListMarkerDrawer.m
+@@ -76,7 +76,7 @@ - (void)drawBulletAtX:(CGFloat)x centerY:(CGFloat)y
+ {
+   [self
+       executeDrawing:^(CGContextRef ctx) {
+-        [[_config listStyleBulletColor] ?: [UIColor blackColor] setFill];
++        [[_config listStyleBulletColor] ?: [RCTUIColor blackColor] setFill];
+         CGFloat size = [_config listStyleBulletSize];
+         CGContextFillEllipseInRect(ctx, CGRectMake(x - size / 2.0, y - size / 2.0, size, size));
+       }
+@@ -95,7 +95,7 @@ - (void)drawOrderedMarkerAtX:(CGFloat)rightBoundaryX attrs:(NSDictionary *)attrs
+ 
+   NSDictionary *mAttrs = @{
+     NSFontAttributeName : font,
+-    NSForegroundColorAttributeName : [_config listStyleMarkerColor] ?: [UIColor blackColor]
++    NSForegroundColorAttributeName : [_config listStyleMarkerColor] ?: [RCTUIColor blackColor]
+   };
+   CGSize size = [text sizeWithAttributes:mAttrs];
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.h b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.h
+index 6fb4b61..bc494cc 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.h
+@@ -1,4 +1,6 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
++#include <TargetConditionals.h>
+ 
+ @class AccessibilityInfo;
+ 
+@@ -18,6 +20,18 @@ NS_ASSUME_NONNULL_BEGIN
+  * - List items get position hints (e.g., "bullet point", "list item 1")
+  * - Other content gets UIAccessibilityTraitStaticText
+  */
++#if TARGET_OS_OSX
+++ (NSMutableArray *)buildElementsForTextView:(UITextView *)textView
++                                         info:(AccessibilityInfo *)info
++                                    container:(id)container;
++
+++ (NSArray *)filterHeadingElements:(NSArray *)elements;
+++ (NSArray *)filterLinkElements:(NSArray *)elements;
+++ (NSArray *)filterImageElements:(NSArray *)elements;
+++ (id _Nullable)createHeadingRotorWithElements:(NSArray *)elements;
+++ (id _Nullable)createLinkRotorWithElements:(NSArray *)elements;
+++ (id _Nullable)createImageRotorWithElements:(NSArray *)elements;
++#else
+ + (NSMutableArray<UIAccessibilityElement *> *)buildElementsForTextView:(UITextView *)textView
+                                                                   info:(AccessibilityInfo *)info
+                                                              container:(id)container;
+@@ -39,6 +53,7 @@ NS_ASSUME_NONNULL_BEGIN
+ 
+ /** Creates a custom rotor for image navigation. */
+ + (UIAccessibilityCustomRotor *)createImageRotorWithElements:(NSArray<UIAccessibilityElement *> *)elements;
++#endif
+ 
+ @end
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m
+index 061966b..95712f2 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m
+@@ -1,5 +1,49 @@
+ #import "MarkdownAccessibilityElementBuilder.h"
+ #import "AccessibilityInfo.h"
++#include <TargetConditionals.h>
++
++#if TARGET_OS_OSX
++
++@implementation MarkdownAccessibilityElementBuilder
++
+++ (NSMutableArray *)buildElementsForTextView:(UITextView *)textView info:(AccessibilityInfo *)info container:(id)container
++{
++  return [NSMutableArray array];
++}
++
+++ (NSArray *)filterHeadingElements:(NSArray *)elements
++{
++  return @[];
++}
++
+++ (NSArray *)filterLinkElements:(NSArray *)elements
++{
++  return @[];
++}
++
+++ (NSArray *)filterImageElements:(NSArray *)elements
++{
++  return @[];
++}
++
+++ (id)createHeadingRotorWithElements:(NSArray *)elements
++{
++  return nil;
++}
++
+++ (id)createLinkRotorWithElements:(NSArray *)elements
++{
++  return nil;
++}
++
+++ (id)createImageRotorWithElements:(NSArray *)elements
++{
++  return nil;
++}
++
++@end
++
++#else
+ 
+ typedef NS_ENUM(NSInteger, ElementType) { ElementTypeText, ElementTypeLink, ElementTypeImage };
+ 
+@@ -321,3 +365,5 @@ + (UIAccessibilityCustomRotor *)createImageRotorWithElements:(NSArray *)els
+ }
+ 
+ @end
++
++#endif
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.h b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.h
+index 788193a..92bf76c 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m
+index eb6f276..e34844f 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m
+@@ -4,6 +4,7 @@
+ #import "LastElementUtils.h"
+ #import "RuntimeKeys.h"
+ #import "ThematicBreakAttachment.h"
++#include <TargetConditionals.h>
+ 
+ #pragma mark - Extraction Context
+ 
+@@ -63,7 +64,11 @@ static void extractFontTraits(NSDictionary *attrs, BOOL *isBold, BOOL *isItalic,
+     UIFontDescriptorSymbolicTraits traits = font.fontDescriptor.symbolicTraits;
+     *isBold = (traits & UIFontDescriptorTraitBold) != 0;
+     *isItalic = (traits & UIFontDescriptorTraitItalic) != 0;
++#if TARGET_OS_OSX
++    *isMonospace = (traits & NSFontDescriptorTraitMonoSpace) != 0;
++#else
+     *isMonospace = (traits & UIFontDescriptorTraitMonoSpace) != 0;
++#endif
+   }
+ }
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/ParagraphStyleUtils.h b/node_modules/react-native-enriched-markdown/ios/utils/ParagraphStyleUtils.h
+index d90da09..11a33cc 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/ParagraphStyleUtils.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/ParagraphStyleUtils.h
+@@ -1,5 +1,6 @@
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.h b/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.h
+index e95f71e..f4a843b 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @class StyleConfig;
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m b/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m
+index b867716..cb5a79b 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m
+@@ -4,7 +4,7 @@
+ #import "MarkdownExtractor.h"
+ #import "RTFExportUtils.h"
+ #import "StyleConfig.h"
+-#import <UIKit/UIPasteboard.h>
++#import <React/RCTUIKit.h>
+ 
+ static NSString *const kUTIPlainText = @"public.utf8-plain-text";
+ static NSString *const kUTIMarkdown = @"net.daringfireball.markdown";
+@@ -81,7 +81,19 @@ void copyAttributedStringToPasteboard(NSAttributedString *attributedString, NSSt
+   addRTFDData(items, rtfPrepared, rtfRange);
+   addRTFData(items, rtfPrepared, rtfRange, NSRTFTextDocumentType, kUTIRTF);
+ 
++#if TARGET_OS_OSX
++  NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
++  [pasteboard clearContents];
++  [items enumerateKeysAndObjectsUsingBlock:^(NSString *uti, id value, BOOL *stop) {
++    if ([value isKindOfClass:[NSString class]]) {
++      [pasteboard setString:value forType:(NSPasteboardType)uti];
++    } else if ([value isKindOfClass:[NSData class]]) {
++      [pasteboard setData:value forType:(NSPasteboardType)uti];
++    }
++  }];
++#else
+   [[UIPasteboard generalPasteboard] setItems:@[ items ]];
++#endif
+ }
+ 
+ #pragma mark - Content Extraction
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.h b/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.h
+index f62b2d6..1bdeecf 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #import <Foundation/Foundation.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @class StyleConfig;
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.m b/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.m
+index f38b384..cf64c1a 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/RTFExportUtils.m
+@@ -36,7 +36,7 @@ static void collectLineStartsInRange(NSString *string, NSRange range, void (^han
+ 
+ #pragma mark - Inline Code Processing
+ 
+-static void processCodes(NSMutableAttributedString *text, UIColor *bgColor)
++static void processCodes(NSMutableAttributedString *text, RCTUIColor *bgColor)
+ {
+   if (!bgColor)
+     return;
+@@ -54,7 +54,7 @@ static void processCodes(NSMutableAttributedString *text, UIColor *bgColor)
+ 
+ #pragma mark - Code Block Processing
+ 
+-static void processCodeBlocks(NSMutableAttributedString *text, UIColor *bgColor)
++static void processCodeBlocks(NSMutableAttributedString *text, RCTUIColor *bgColor)
+ {
+   if (!bgColor)
+     return;
+@@ -92,7 +92,7 @@ static void processCodeBlocks(NSMutableAttributedString *text, UIColor *bgColor)
+ 
+ #pragma mark - Blockquote Processing
+ 
+-static void processBlockquotes(NSMutableAttributedString *text, UIColor *bgColor)
++static void processBlockquotes(NSMutableAttributedString *text, RCTUIColor *bgColor)
+ {
+   NSString *string = text.string;
+ 
+@@ -283,9 +283,9 @@ static void processThematicBreaks(NSMutableAttributedString *text)
+ 
+   NSMutableAttributedString *prepared = [attributedString mutableCopy];
+ 
+-  UIColor *codeBgColor = [styleConfig codeBackgroundColor];
+-  UIColor *codeBlockBgColor = [styleConfig codeBlockBackgroundColor];
+-  UIColor *blockquoteBgColor = [styleConfig blockquoteBackgroundColor];
++  RCTUIColor *codeBgColor = [styleConfig codeBackgroundColor];
++  RCTUIColor *codeBlockBgColor = [styleConfig codeBlockBackgroundColor];
++  RCTUIColor *blockquoteBgColor = [styleConfig blockquoteBackgroundColor];
+ 
+   processThematicBreaks(prepared);
+   processCodes(prepared, codeBgColor);
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/TextViewLayoutManager.h b/node_modules/react-native-enriched-markdown/ios/utils/TextViewLayoutManager.h
+index 6fbe525..eee938a 100644
+--- a/node_modules/react-native-enriched-markdown/ios/utils/TextViewLayoutManager.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/TextViewLayoutManager.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 

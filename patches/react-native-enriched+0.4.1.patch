@@ -1,0 +1,2050 @@
+diff --git a/node_modules/react-native-enriched/ReactNativeEnriched.podspec b/node_modules/react-native-enriched/ReactNativeEnriched.podspec
+index a7c3ace..1a9c84a 100644
+--- a/node_modules/react-native-enriched/ReactNativeEnriched.podspec
++++ b/node_modules/react-native-enriched/ReactNativeEnriched.podspec
+@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
+   s.license      = package["license"]
+   s.authors      = package["author"]
+ 
+-  s.platforms    = { :ios => min_ios_version_supported }
++  s.platforms    = { :ios => min_ios_version_supported, :osx => 11.0 }
+   s.source       = { :git => "https://github.com/software-mansion/react-native-enriched.git", :tag => "#{s.version}" }
+ 
+   s.source_files = "ios/**/*.{h,m,mm,cpp}"
+diff --git a/node_modules/react-native-enriched/ios/EnrichedTextInputView.h b/node_modules/react-native-enriched/ios/EnrichedTextInputView.h
+index 8ef2255..4710ef2 100644
+--- a/node_modules/react-native-enriched/ios/EnrichedTextInputView.h
++++ b/node_modules/react-native-enriched/ios/EnrichedTextInputView.h
+@@ -5,7 +5,8 @@
+ #import "InputTextView.h"
+ #import "MediaAttachment.h"
+ #import <React/RCTViewComponentView.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ #ifndef EnrichedTextInputViewNativeComponent_h
+ #define EnrichedTextInputViewNativeComponent_h
+diff --git a/node_modules/react-native-enriched/ios/EnrichedTextInputView.mm b/node_modules/react-native-enriched/ios/EnrichedTextInputView.mm
+index 09045e5..73a0573 100644
+--- a/node_modules/react-native-enriched/ios/EnrichedTextInputView.mm
++++ b/node_modules/react-native-enriched/ios/EnrichedTextInputView.mm
+@@ -45,11 +45,11 @@ @implementation EnrichedTextInputView {
+   NSRange _recentlyActiveMentionRange;
+   NSString *_recentlyEmittedHtml;
+   BOOL _emitHtml;
+-  UILabel *_placeholderLabel;
+-  UIColor *_placeholderColor;
++  RCTUILabel *_placeholderLabel;
++  RCTUIColor *_placeholderColor;
+   BOOL _emitFocusBlur;
+   BOOL _emitTextChange;
+-  NSMutableDictionary<NSValue *, UIImageView *> *_attachmentViews;
++  NSMutableDictionary<NSValue *, RCTUIImageView *> *_attachmentViews;
+ }
+ 
+ // MARK: - Component utils
+@@ -259,20 +259,28 @@ - (void)setDefaults {
+ 
+ - (void)setupTextView {
+   textView = [[InputTextView alloc] init];
+-  textView.backgroundColor = UIColor.clearColor;
++  textView.backgroundColor = RCTUIColor.clearColor;
++  textView.editable = YES;
++  textView.selectable = YES;
++#if TARGET_OS_OSX
++  textView.textContainerInset = NSMakeSize(0, 0);
++#else
+   textView.textContainerInset = UIEdgeInsetsMake(0, 0, 0, 0);
++#endif
+   textView.textContainer.lineFragmentPadding = 0;
+   textView.delegate = self;
+   textView.input = self;
+   textView.layoutManager.input = self;
+   textView.adjustsFontForContentSizeCategory = YES;
++#if !TARGET_OS_OSX
+   [textView addGestureRecognizer:[[TextBlockTapGestureRecognizer alloc]
+                                      initWithInput:self
+                                             action:@selector(onTextBlockTap:)]];
++#endif
+ }
+ 
+ - (void)setupPlaceholderLabel {
+-  _placeholderLabel = [[UILabel alloc] initWithFrame:CGRectZero];
++  _placeholderLabel = [[RCTUILabel alloc] initWithFrame:CGRectZero];
+   _placeholderLabel.translatesAutoresizingMaskIntoConstraints = NO;
+   [textView addSubview:_placeholderLabel];
+   [NSLayoutConstraint activateConstraints:@[
+@@ -287,7 +295,9 @@ - (void)setupPlaceholderLabel {
+   _placeholderLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+   _placeholderLabel.text = @"";
+   _placeholderLabel.hidden = YES;
++#if !TARGET_OS_OSX
+   _placeholderLabel.adjustsFontForContentSizeCategory = YES;
++#endif
+ }
+ 
+ // MARK: - Props
+@@ -314,7 +324,7 @@ - (void)updateProps:(Props::Shared const &)props
+ 
+   if (newViewProps.color != oldViewProps.color) {
+     if (isColorMeaningful(newViewProps.color)) {
+-      UIColor *uiColor = RCTUIColorFromSharedColor(newViewProps.color);
++      RCTUIColor *uiColor = RCTUIColorFromSharedColor(newViewProps.color);
+       [newConfig setPrimaryColor:uiColor];
+     } else {
+       [newConfig setPrimaryColor:nullptr];
+@@ -874,10 +884,23 @@ - (void)refreshPlaceholderLabelStyles {
+   if (_placeholderColor != nullptr) {
+     newAttrs[NSForegroundColorAttributeName] = _placeholderColor;
+   }
++  NSString *placeholderText = _placeholderLabel.text;
++#if TARGET_OS_OSX
++  if (placeholderText == nil) {
++    placeholderText = _placeholderLabel.stringValue;
++  }
++#endif
++  if (placeholderText == nil) {
++    placeholderText = @"";
++  }
+   NSAttributedString *newAttrStr =
+-      [[NSAttributedString alloc] initWithString:_placeholderLabel.text
++      [[NSAttributedString alloc] initWithString:placeholderText
+                                       attributes:newAttrs];
++#if TARGET_OS_OSX
++  _placeholderLabel.attributedStringValue = newAttrStr;
++#else
+   _placeholderLabel.attributedText = newAttrStr;
++#endif
+ }
+ 
+ // MARK: - Measuring and states
+@@ -1768,7 +1791,11 @@ - (void)didMoveToWindow {
+ 
+ // MARK: - UITextView delegate methods
+ 
+-- (void)textViewDidBeginEditing:(UITextView *)textView {
++- (void)handleTextViewDidBeginEditing:(UITextView *)typedTextView {
++  if (typedTextView == nil) {
++    return;
++  }
++
+   auto emitter = [self getEventEmitter];
+   if (emitter != nullptr) {
+     // send onFocus event if allowed
+@@ -1777,12 +1804,13 @@ - (void)textViewDidBeginEditing:(UITextView *)textView {
+     }
+ 
+     NSString *textAtSelection =
+-        [[[NSMutableString alloc] initWithString:textView.textStorage.string]
+-            substringWithRange:textView.selectedRange];
++        [[[NSMutableString alloc]
++            initWithString:typedTextView.textStorage.string]
++            substringWithRange:typedTextView.selectedRange];
+     emitter->onChangeSelection(
+-        {.start = static_cast<int>(textView.selectedRange.location),
+-         .end = static_cast<int>(textView.selectedRange.location +
+-                                 textView.selectedRange.length),
++        {.start = static_cast<int>(typedTextView.selectedRange.location),
++         .end = static_cast<int>(typedTextView.selectedRange.location +
++                                 typedTextView.selectedRange.length),
+          .text = [textAtSelection toCppString]});
+   }
+   // manage selection changes since textViewDidChangeSelection sometimes doesn't
+@@ -1790,7 +1818,11 @@ - (void)textViewDidBeginEditing:(UITextView *)textView {
+   [self manageSelectionBasedChanges];
+ }
+ 
+-- (void)textViewDidEndEditing:(UITextView *)textView {
++- (void)handleTextViewDidEndEditing:(UITextView *)typedTextView {
++  if (typedTextView == nil) {
++    return;
++  }
++
+   auto emitter = [self getEventEmitter];
+   if (emitter != nullptr && _emitFocusBlur) {
+     // send onBlur event
+@@ -1798,6 +1830,24 @@ - (void)textViewDidEndEditing:(UITextView *)textView {
+   }
+ }
+ 
++#if TARGET_OS_OSX
++- (void)textDidBeginEditing:(NSNotification *)notification {
++  [self handleTextViewDidBeginEditing:(UITextView *)notification.object];
++}
++
++- (void)textDidEndEditing:(NSNotification *)notification {
++  [self handleTextViewDidEndEditing:(UITextView *)notification.object];
++}
++#else
++- (void)textViewDidBeginEditing:(UITextView *)textView {
++  [self handleTextViewDidBeginEditing:textView];
++}
++
++- (void)textViewDidEndEditing:(UITextView *)textView {
++  [self handleTextViewDidEndEditing:textView];
++}
++#endif
++
+ - (void)handleKeyPressInRange:(NSString *)text range:(NSRange)range {
+   NSString *key = nil;
+ 
+@@ -1895,11 +1945,16 @@ - (bool)textView:(UITextView *)textView
+   return YES;
+ }
+ 
+-- (void)textViewDidChangeSelection:(UITextView *)textView {
++- (void)handleTextViewDidChangeSelection:(UITextView *)typedTextView {
++  if (typedTextView == nil) {
++    return;
++  }
++
+   // emit the event
+   NSString *textAtSelection =
+-      [[[NSMutableString alloc] initWithString:textView.textStorage.string]
+-          substringWithRange:textView.selectedRange];
++      [[[NSMutableString alloc]
++          initWithString:typedTextView.textStorage.string]
++          substringWithRange:typedTextView.selectedRange];
+ 
+   auto emitter = [self getEventEmitter];
+   if (emitter != nullptr) {
+@@ -1907,9 +1962,9 @@ - (void)textViewDidChangeSelection:(UITextView *)textView {
+     // here, start is the location, but end is the first index BEHIND the end.
+     // So a 0 length range will have equal start and end
+     emitter->onChangeSelection(
+-        {.start = static_cast<int>(textView.selectedRange.location),
+-         .end = static_cast<int>(textView.selectedRange.location +
+-                                 textView.selectedRange.length),
++        {.start = static_cast<int>(typedTextView.selectedRange.location),
++         .end = static_cast<int>(typedTextView.selectedRange.location +
++                                 typedTextView.selectedRange.length),
+          .text = [textAtSelection toCppString]});
+   }
+ 
+@@ -1917,13 +1972,36 @@ - (void)textViewDidChangeSelection:(UITextView *)textView {
+   [self manageSelectionBasedChanges];
+ }
+ 
++#if TARGET_OS_OSX
++- (void)textViewDidChangeSelection:(NSNotification *)notification {
++  [self handleTextViewDidChangeSelection:(UITextView *)notification.object];
++}
++#else
++- (void)textViewDidChangeSelection:(UITextView *)textView {
++  [self handleTextViewDidChangeSelection:textView];
++}
++#endif
++
+ // this function isn't called always when some text changes (for example setting
+ // link or starting mention with indicator doesn't fire it) so all the logic is
+ // in anyTextMayHaveBeenModified
+-- (void)textViewDidChange:(UITextView *)textView {
++- (void)handleTextViewDidChange:(UITextView *)typedTextView {
++  if (typedTextView == nil) {
++    return;
++  }
+   [self anyTextMayHaveBeenModified];
+ }
+ 
++#if TARGET_OS_OSX
++- (void)textDidChange:(NSNotification *)notification {
++  [self handleTextViewDidChange:(UITextView *)notification.object];
++}
++#else
++- (void)textViewDidChange:(UITextView *)textView {
++  [self handleTextViewDidChange:textView];
++}
++#endif
++
+ /**
+  * Handles iOS Dynamic Type changes (User changing font size in System
+  * Settings).
+@@ -1934,6 +2012,7 @@ - (void)textViewDidChange:(UITextView *)textView {
+  *
+  * This method detects the change and performs a "Hard Refresh" of the content.
+  */
++#if !TARGET_OS_OSX
+ - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+   [super traitCollectionDidChange:previousTraitCollection];
+ 
+@@ -1962,6 +2041,7 @@ - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+     [self anyTextMayHaveBeenModified];
+   }
+ }
++#endif
+ 
+ - (void)onTextBlockTap:(TextBlockTapGestureRecognizer *)gr {
+   if (gr.state != UIGestureRecognizerStateEnded)
+@@ -2043,7 +2123,7 @@ - (void)mediaAttachmentDidUpdate:(NSTextAttachment *)attachment {
+ 
+ - (void)layoutAttachments {
+   NSTextStorage *storage = textView.textStorage;
+-  NSMutableDictionary<NSValue *, UIImageView *> *activeAttachmentViews =
++  NSMutableDictionary<NSValue *, RCTUIImageView *> *activeAttachmentViews =
+       [NSMutableDictionary dictionary];
+ 
+   // Iterate over the entire text to find ImageAttachments
+@@ -2061,13 +2141,13 @@ - (void)layoutAttachments {
+                        // attachment key
+                        NSValue *key =
+                            [NSValue valueWithNonretainedObject:attachment];
+-                       UIImageView *imgView = _attachmentViews[key];
++                       RCTUIImageView *imgView = _attachmentViews[key];
+ 
+                        if (!imgView) {
+                          // It doesn't exist yet, create it
+-                         imgView = [[UIImageView alloc] initWithFrame:rect];
++                         imgView = [[RCTUIImageView alloc] initWithFrame:rect];
+                          imgView.contentMode = UIViewContentModeScaleAspectFit;
+-                         imgView.tintColor = [UIColor labelColor];
++                         imgView.tintColor = [RCTUIColor labelColor];
+ 
+                          // Add it directly to the TextView
+                          [textView addSubview:imgView];
+@@ -2077,7 +2157,7 @@ - (void)layoutAttachments {
+                        if (!CGRectEqualToRect(imgView.frame, rect)) {
+                          imgView.frame = rect;
+                        }
+-                       UIImage *targetImage =
++                       RCTUIImage *targetImage =
+                            attachment.storedAnimatedImage ?: attachment.image;
+ 
+                        // Only set if different to avoid resetting the animation
+@@ -2097,7 +2177,7 @@ - (void)layoutAttachments {
+                    }];
+ 
+   // Everything remaining in _attachmentViews is dead or off-screen
+-  for (UIImageView *danglingView in _attachmentViews.allValues) {
++  for (RCTUIImageView *danglingView in _attachmentViews.allValues) {
+     [danglingView removeFromSuperview];
+   }
+   _attachmentViews = activeAttachmentViews;
+@@ -2129,9 +2209,15 @@ - (CGRect)frameForAttachment:(ImageAttachment *)attachment
+   // Calculate (Baseline Alignment)
+   CGFloat targetY =
+       CGRectGetMaxY(lineRect) + font.descender - attachmentSize.height;
++#if TARGET_OS_OSX
++  CGFloat insetLeft = textView.textContainerInset.width;
++  CGFloat insetTop = textView.textContainerInset.height;
++#else
++  CGFloat insetLeft = textView.textContainerInset.left;
++  CGFloat insetTop = textView.textContainerInset.top;
++#endif
+   CGRect rect =
+-      CGRectMake(glyphRect.origin.x + textView.textContainerInset.left,
+-                 targetY + textView.textContainerInset.top,
++      CGRectMake(glyphRect.origin.x + insetLeft, targetY + insetTop,
+                  attachmentSize.width, attachmentSize.height);
+ 
+   return CGRectIntegral(rect);
+diff --git a/node_modules/react-native-enriched/ios/config/InputConfig.h b/node_modules/react-native-enriched/ios/config/InputConfig.h
+index 80ae185..1ff573d 100644
+--- a/node_modules/react-native-enriched/ios/config/InputConfig.h
++++ b/node_modules/react-native-enriched/ios/config/InputConfig.h
+@@ -2,12 +2,13 @@
+ #import "LinkRegexConfig.h"
+ #import "MentionStyleProps.h"
+ #import "TextDecorationLineEnum.h"
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface InputConfig : NSObject <NSCopying>
+ - (instancetype)init;
+-- (UIColor *)primaryColor;
+-- (void)setPrimaryColor:(UIColor *)newValue;
++- (RCTUIColor *)primaryColor;
++- (void)setPrimaryColor:(RCTUIColor *)newValue;
+ - (NSNumber *)primaryFontSize;
+ - (void)setPrimaryFontSize:(NSNumber *)newValue;
+ - (NSString *)primaryFontWeight;
+@@ -42,45 +43,45 @@
+ - (void)setH6FontSize:(CGFloat)newValue;
+ - (BOOL)h6Bold;
+ - (void)setH6Bold:(BOOL)newValue;
+-- (UIColor *)blockquoteBorderColor;
+-- (void)setBlockquoteBorderColor:(UIColor *)newValue;
++- (RCTUIColor *)blockquoteBorderColor;
++- (void)setBlockquoteBorderColor:(RCTUIColor *)newValue;
+ - (CGFloat)blockquoteBorderWidth;
+ - (void)setBlockquoteBorderWidth:(CGFloat)newValue;
+ - (CGFloat)blockquoteGapWidth;
+ - (void)setBlockquoteGapWidth:(CGFloat)newValue;
+-- (UIColor *)blockquoteColor;
+-- (void)setBlockquoteColor:(UIColor *)newValue;
+-- (UIColor *)inlineCodeFgColor;
+-- (void)setInlineCodeFgColor:(UIColor *)newValue;
+-- (UIColor *)inlineCodeBgColor;
+-- (void)setInlineCodeBgColor:(UIColor *)newValue;
++- (RCTUIColor *)blockquoteColor;
++- (void)setBlockquoteColor:(RCTUIColor *)newValue;
++- (RCTUIColor *)inlineCodeFgColor;
++- (void)setInlineCodeFgColor:(RCTUIColor *)newValue;
++- (RCTUIColor *)inlineCodeBgColor;
++- (void)setInlineCodeBgColor:(RCTUIColor *)newValue;
+ - (CGFloat)orderedListGapWidth;
+ - (void)setOrderedListGapWidth:(CGFloat)newValue;
+ - (CGFloat)orderedListMarginLeft;
+ - (void)setOrderedListMarginLeft:(CGFloat)newValue;
+ - (NSString *)orderedListMarkerFontWeight;
+ - (void)setOrderedListMarkerFontWeight:(NSString *)newValue;
+-- (UIColor *)orderedListMarkerColor;
+-- (void)setOrderedListMarkerColor:(UIColor *)newValue;
++- (RCTUIColor *)orderedListMarkerColor;
++- (void)setOrderedListMarkerColor:(RCTUIColor *)newValue;
+ - (UIFont *)orderedListMarkerFont;
+-- (UIColor *)unorderedListBulletColor;
+-- (void)setUnorderedListBulletColor:(UIColor *)newValue;
++- (RCTUIColor *)unorderedListBulletColor;
++- (void)setUnorderedListBulletColor:(RCTUIColor *)newValue;
+ - (CGFloat)unorderedListBulletSize;
+ - (void)setUnorderedListBulletSize:(CGFloat)newValue;
+ - (CGFloat)unorderedListGapWidth;
+ - (void)setUnorderedListGapWidth:(CGFloat)newValue;
+ - (CGFloat)unorderedListMarginLeft;
+ - (void)setUnorderedListMarginLeft:(CGFloat)newValue;
+-- (UIColor *)linkColor;
+-- (void)setLinkColor:(UIColor *)newValue;
++- (RCTUIColor *)linkColor;
++- (void)setLinkColor:(RCTUIColor *)newValue;
+ - (TextDecorationLineEnum)linkDecorationLine;
+ - (void)setLinkDecorationLine:(TextDecorationLineEnum)newValue;
+ - (void)setMentionStyleProps:(NSDictionary *)newValue;
+ - (MentionStyleProps *)mentionStylePropsForIndicator:(NSString *)indicator;
+-- (UIColor *)codeBlockFgColor;
+-- (void)setCodeBlockFgColor:(UIColor *)newValue;
+-- (UIColor *)codeBlockBgColor;
+-- (void)setCodeBlockBgColor:(UIColor *)newValue;
++- (RCTUIColor *)codeBlockFgColor;
++- (void)setCodeBlockFgColor:(RCTUIColor *)newValue;
++- (RCTUIColor *)codeBlockBgColor;
++- (void)setCodeBlockBgColor:(RCTUIColor *)newValue;
+ - (CGFloat)codeBlockBorderRadius;
+ - (void)setCodeBlockBorderRadius:(CGFloat)newValue;
+ - (LinkRegexConfig *)linkRegexConfig;
+@@ -94,8 +95,8 @@
+ - (void)setCheckboxListGapWidth:(CGFloat)newValue;
+ - (CGFloat)checkboxListMarginLeft;
+ - (void)setCheckboxListMarginLeft:(CGFloat)newValue;
+-- (UIColor *)checkboxListBoxColor;
+-- (void)setCheckboxListBoxColor:(UIColor *)newValue;
+-- (UIImage *)checkboxCheckedImage;
+-- (UIImage *)checkboxUncheckedImage;
++- (RCTUIColor *)checkboxListBoxColor;
++- (void)setCheckboxListBoxColor:(RCTUIColor *)newValue;
++- (RCTUIImage *)checkboxCheckedImage;
++- (RCTUIImage *)checkboxUncheckedImage;
+ @end
+diff --git a/node_modules/react-native-enriched/ios/config/InputConfig.mm b/node_modules/react-native-enriched/ios/config/InputConfig.mm
+index d768f4d..cc06b4e 100644
+--- a/node_modules/react-native-enriched/ios/config/InputConfig.mm
++++ b/node_modules/react-native-enriched/ios/config/InputConfig.mm
+@@ -1,8 +1,17 @@
+ #import <InputConfig.h>
+ #import <React/RCTFont.h>
++#import <TargetConditionals.h>
++
++static CGFloat RNEScaledMetric(CGFloat value) {
++#if TARGET_OS_OSX
++  return value;
++#else
++  return [[UIFontMetrics defaultMetrics] scaledValueForValue:value];
++#endif
++}
+ 
+ @implementation InputConfig {
+-  UIColor *_primaryColor;
++  RCTUIColor *_primaryColor;
+   NSNumber *_primaryFontSize;
+   NSString *_primaryFontWeight;
+   NSString *_primaryFontFamily;
+@@ -23,36 +32,36 @@ @implementation InputConfig {
+   BOOL _h5Bold;
+   CGFloat _h6FontSize;
+   BOOL _h6Bold;
+-  UIColor *_blockquoteBorderColor;
++  RCTUIColor *_blockquoteBorderColor;
+   CGFloat _blockquoteBorderWidth;
+   CGFloat _blockquoteGapWidth;
+-  UIColor *_blockquoteColor;
+-  UIColor *_inlineCodeFgColor;
+-  UIColor *_inlineCodeBgColor;
++  RCTUIColor *_blockquoteColor;
++  RCTUIColor *_inlineCodeFgColor;
++  RCTUIColor *_inlineCodeBgColor;
+   CGFloat _orderedListGapWidth;
+   CGFloat _orderedListMarginLeft;
+   NSString *_orderedListMarkerFontWeight;
+-  UIColor *_orderedListMarkerColor;
++  RCTUIColor *_orderedListMarkerColor;
+   UIFont *_orderedListMarkerFont;
+   BOOL _olMarkerFontNeedsRecreation;
+-  UIColor *_unorderedListBulletColor;
++  RCTUIColor *_unorderedListBulletColor;
+   CGFloat _unorderedListBulletSize;
+   CGFloat _unorderedListGapWidth;
+   CGFloat _unorderedListMarginLeft;
+-  UIColor *_linkColor;
++  RCTUIColor *_linkColor;
+   TextDecorationLineEnum _linkDecorationLine;
+   NSDictionary *_mentionProperties;
+-  UIColor *_codeBlockFgColor;
++  RCTUIColor *_codeBlockFgColor;
+   CGFloat _codeBlockBorderRadius;
+-  UIColor *_codeBlockBgColor;
++  RCTUIColor *_codeBlockBgColor;
+   LinkRegexConfig *_linkRegexConfig;
+   NSRegularExpression *_parsedLinkRegex;
+   CGFloat _checkboxListBoxSize;
+   CGFloat _checkboxListGapWidth;
+   CGFloat _checkboxListMarginLeft;
+-  UIColor *_checkboxListBoxColor;
+-  UIImage *_checkboxCheckedImage;
+-  UIImage *_checkboxUncheckedImage;
++  RCTUIColor *_checkboxListBoxColor;
++  RCTUIImage *_checkboxCheckedImage;
++  RCTUIImage *_checkboxUncheckedImage;
+ }
+ 
+ - (instancetype)init {
+@@ -116,11 +125,11 @@ - (id)copyWithZone:(NSZone *)zone {
+   return copy;
+ }
+ 
+-- (UIColor *)primaryColor {
+-  return _primaryColor != nullptr ? _primaryColor : UIColor.blackColor;
++- (RCTUIColor *)primaryColor {
++  return _primaryColor != nullptr ? _primaryColor : RCTUIColor.blackColor;
+ }
+ 
+-- (void)setPrimaryColor:(UIColor *)newValue {
++- (void)setPrimaryColor:(RCTUIColor *)newValue {
+   _primaryColor = newValue;
+ }
+ 
+@@ -201,7 +210,7 @@ - (void)setMentionIndicators:(NSSet<NSNumber *> *)newValue {
+ }
+ 
+ - (CGFloat)h1FontSize {
+-  return [[UIFontMetrics defaultMetrics] scaledValueForValue:_h1FontSize];
++  return RNEScaledMetric(_h1FontSize);
+ }
+ 
+ - (void)setH1FontSize:(CGFloat)newValue {
+@@ -217,7 +226,7 @@ - (void)setH1Bold:(BOOL)newValue {
+ }
+ 
+ - (CGFloat)h2FontSize {
+-  return [[UIFontMetrics defaultMetrics] scaledValueForValue:_h2FontSize];
++  return RNEScaledMetric(_h2FontSize);
+ }
+ 
+ - (void)setH2FontSize:(CGFloat)newValue {
+@@ -233,7 +242,7 @@ - (void)setH2Bold:(BOOL)newValue {
+ }
+ 
+ - (CGFloat)h3FontSize {
+-  return [[UIFontMetrics defaultMetrics] scaledValueForValue:_h3FontSize];
++  return RNEScaledMetric(_h3FontSize);
+ }
+ 
+ - (void)setH3FontSize:(CGFloat)newValue {
+@@ -249,7 +258,7 @@ - (void)setH3Bold:(BOOL)newValue {
+ }
+ 
+ - (CGFloat)h4FontSize {
+-  return [[UIFontMetrics defaultMetrics] scaledValueForValue:_h4FontSize];
++  return RNEScaledMetric(_h4FontSize);
+ }
+ 
+ - (void)setH4FontSize:(CGFloat)newValue {
+@@ -265,7 +274,7 @@ - (void)setH4Bold:(BOOL)newValue {
+ }
+ 
+ - (CGFloat)h5FontSize {
+-  return [[UIFontMetrics defaultMetrics] scaledValueForValue:_h5FontSize];
++  return RNEScaledMetric(_h5FontSize);
+ }
+ 
+ - (void)setH5FontSize:(CGFloat)newValue {
+@@ -281,7 +290,7 @@ - (void)setH5Bold:(BOOL)newValue {
+ }
+ 
+ - (CGFloat)h6FontSize {
+-  return [[UIFontMetrics defaultMetrics] scaledValueForValue:_h6FontSize];
++  return RNEScaledMetric(_h6FontSize);
+ }
+ 
+ - (void)setH6FontSize:(CGFloat)newValue {
+@@ -296,11 +305,11 @@ - (void)setH6Bold:(BOOL)newValue {
+   _h6Bold = newValue;
+ }
+ 
+-- (UIColor *)blockquoteBorderColor {
++- (RCTUIColor *)blockquoteBorderColor {
+   return _blockquoteBorderColor;
+ }
+ 
+-- (void)setBlockquoteBorderColor:(UIColor *)newValue {
++- (void)setBlockquoteBorderColor:(RCTUIColor *)newValue {
+   _blockquoteBorderColor = newValue;
+ }
+ 
+@@ -320,27 +329,27 @@ - (void)setBlockquoteGapWidth:(CGFloat)newValue {
+   _blockquoteGapWidth = newValue;
+ }
+ 
+-- (UIColor *)blockquoteColor {
++- (RCTUIColor *)blockquoteColor {
+   return _blockquoteColor;
+ }
+ 
+-- (void)setBlockquoteColor:(UIColor *)newValue {
++- (void)setBlockquoteColor:(RCTUIColor *)newValue {
+   _blockquoteColor = newValue;
+ }
+ 
+-- (UIColor *)inlineCodeFgColor {
++- (RCTUIColor *)inlineCodeFgColor {
+   return _inlineCodeFgColor;
+ }
+ 
+-- (void)setInlineCodeFgColor:(UIColor *)newValue {
++- (void)setInlineCodeFgColor:(RCTUIColor *)newValue {
+   _inlineCodeFgColor = newValue;
+ }
+ 
+-- (UIColor *)inlineCodeBgColor {
++- (RCTUIColor *)inlineCodeBgColor {
+   return _inlineCodeBgColor;
+ }
+ 
+-- (void)setInlineCodeBgColor:(UIColor *)newValue {
++- (void)setInlineCodeBgColor:(RCTUIColor *)newValue {
+   _inlineCodeBgColor = newValue;
+ }
+ 
+@@ -369,11 +378,11 @@ - (void)setOrderedListMarkerFontWeight:(NSString *)newValue {
+   _olMarkerFontNeedsRecreation = YES;
+ }
+ 
+-- (UIColor *)orderedListMarkerColor {
++- (RCTUIColor *)orderedListMarkerColor {
+   return _orderedListMarkerColor;
+ }
+ 
+-- (void)setOrderedListMarkerColor:(UIColor *)newValue {
++- (void)setOrderedListMarkerColor:(RCTUIColor *)newValue {
+   _orderedListMarkerColor = newValue;
+ }
+ 
+@@ -401,11 +410,11 @@ - (UIFont *)orderedListMarkerFont {
+   return _orderedListMarkerFont;
+ }
+ 
+-- (UIColor *)unorderedListBulletColor {
++- (RCTUIColor *)unorderedListBulletColor {
+   return _unorderedListBulletColor;
+ }
+ 
+-- (void)setUnorderedListBulletColor:(UIColor *)newValue {
++- (void)setUnorderedListBulletColor:(RCTUIColor *)newValue {
+   _unorderedListBulletColor = newValue;
+ }
+ 
+@@ -433,11 +442,11 @@ - (void)setUnorderedListMarginLeft:(CGFloat)newValue {
+   _unorderedListMarginLeft = newValue;
+ }
+ 
+-- (UIColor *)linkColor {
++- (RCTUIColor *)linkColor {
+   return _linkColor;
+ }
+ 
+-- (void)setLinkColor:(UIColor *)newValue {
++- (void)setLinkColor:(RCTUIColor *)newValue {
+   _linkColor = newValue;
+ }
+ 
+@@ -461,25 +470,25 @@ - (MentionStyleProps *)mentionStylePropsForIndicator:(NSString *)indicator {
+     return _mentionProperties[indicator];
+   }
+   MentionStyleProps *fallbackProps = [[MentionStyleProps alloc] init];
+-  fallbackProps.color = [UIColor blueColor];
+-  fallbackProps.backgroundColor = [UIColor yellowColor];
++  fallbackProps.color = [RCTUIColor blueColor];
++  fallbackProps.backgroundColor = [RCTUIColor yellowColor];
+   fallbackProps.decorationLine = DecorationUnderline;
+   return fallbackProps;
+ }
+ 
+-- (UIColor *)codeBlockFgColor {
++- (RCTUIColor *)codeBlockFgColor {
+   return _codeBlockFgColor;
+ }
+ 
+-- (void)setCodeBlockFgColor:(UIColor *)newValue {
++- (void)setCodeBlockFgColor:(RCTUIColor *)newValue {
+   _codeBlockFgColor = newValue;
+ }
+ 
+-- (UIColor *)codeBlockBgColor {
++- (RCTUIColor *)codeBlockBgColor {
+   return _codeBlockBgColor;
+ }
+ 
+-- (void)setCodeBlockBgColor:(UIColor *)newValue {
++- (void)setCodeBlockBgColor:(RCTUIColor *)newValue {
+   _codeBlockBgColor = newValue;
+ }
+ 
+@@ -534,8 +543,7 @@ - (void)invalidateFonts {
+ }
+ 
+ - (NSNumber *)scaledPrimaryFontSize {
+-  CGFloat scaledSize = [[UIFontMetrics defaultMetrics]
+-      scaledValueForValue:[[self primaryFontSize] floatValue]];
++  CGFloat scaledSize = RNEScaledMetric([[self primaryFontSize] floatValue]);
+   return @(scaledSize);
+ }
+ 
+@@ -568,11 +576,11 @@ - (void)setCheckboxListMarginLeft:(CGFloat)newValue {
+   _checkboxListMarginLeft = newValue;
+ }
+ 
+-- (UIColor *)checkboxListBoxColor {
++- (RCTUIColor *)checkboxListBoxColor {
+   return _checkboxListBoxColor;
+ }
+ 
+-- (void)setCheckboxListBoxColor:(UIColor *)newValue {
++- (void)setCheckboxListBoxColor:(RCTUIColor *)newValue {
+   if (_checkboxListBoxColor != newValue) {
+     _checkboxListBoxColor = newValue;
+     // Invalidate checkbox images because color changed
+@@ -581,34 +589,44 @@ - (void)setCheckboxListBoxColor:(UIColor *)newValue {
+   }
+ }
+ 
+-- (UIImage *)checkboxCheckedImage {
++- (RCTUIImage *)checkboxCheckedImage {
+   if (!_checkboxCheckedImage) {
+     _checkboxCheckedImage = [self generateCheckboxImage:YES];
+   }
+   return _checkboxCheckedImage;
+ }
+ 
+-- (UIImage *)checkboxUncheckedImage {
++- (RCTUIImage *)checkboxUncheckedImage {
+   if (!_checkboxUncheckedImage) {
+     _checkboxUncheckedImage = [self generateCheckboxImage:NO];
+   }
+   return _checkboxUncheckedImage;
+ }
+ 
+-- (UIImage *)generateCheckboxImage:(BOOL)isChecked {
++- (RCTUIImage *)generateCheckboxImage:(BOOL)isChecked {
+   CGFloat boxSize = self.checkboxListBoxSize;
+-  UIColor *boxColor = self.checkboxListBoxColor ?: [UIColor blackColor];
+-
++  RCTUIColor *boxColor = self.checkboxListBoxColor ?: [RCTUIColor blackColor];
++#if TARGET_OS_OSX
++  NSImage *result = [[NSImage alloc] initWithSize:CGSizeMake(boxSize, boxSize)];
++  [result lockFocus];
++#else
+   UIGraphicsBeginImageContextWithOptions(CGSizeMake(boxSize, boxSize), NO, 0.0);
++#endif
++
+   CGRect localRect = CGRectMake(0, 0, boxSize, boxSize);
+   CGFloat cornerRadius = boxSize * 0.15f;
+   CGFloat strokeWidth = boxSize * 0.1f;
+   CGRect insetRect =
+       CGRectInset(localRect, strokeWidth / 2.0, strokeWidth / 2.0);
+ 
+-  // Draw Box
++#if TARGET_OS_OSX
++  UIBezierPath *boxPath = [UIBezierPath bezierPathWithRoundedRect:insetRect
++                                                           xRadius:cornerRadius
++                                                           yRadius:cornerRadius];
++#else
+   UIBezierPath *boxPath = [UIBezierPath bezierPathWithRoundedRect:insetRect
+                                                      cornerRadius:cornerRadius];
++#endif
+   [boxPath setLineWidth:strokeWidth];
+ 
+   if (isChecked) {
+@@ -617,7 +635,6 @@ - (UIImage *)generateCheckboxImage:(BOOL)isChecked {
+     [[boxColor colorWithAlphaComponent:1.0] setStroke];
+     [boxPath stroke];
+ 
+-    // Draw Checkmark
+     UIBezierPath *checkPath = [UIBezierPath bezierPath];
+     CGFloat startX = insetRect.origin.x + insetRect.size.width * 0.25;
+     CGFloat startY = insetRect.origin.y + insetRect.size.height * 0.5;
+@@ -627,23 +644,36 @@ - (UIImage *)generateCheckboxImage:(BOOL)isChecked {
+     CGFloat endY = insetRect.origin.y + insetRect.size.height * 0.35;
+ 
+     [checkPath moveToPoint:CGPointMake(startX, startY)];
++#if TARGET_OS_OSX
++    [checkPath lineToPoint:CGPointMake(midX, midY)];
++    [checkPath lineToPoint:CGPointMake(endX, endY)];
++#else
+     [checkPath addLineToPoint:CGPointMake(midX, midY)];
+     [checkPath addLineToPoint:CGPointMake(endX, endY)];
+-
++#endif
+     [checkPath setLineWidth:strokeWidth * 1.5];
+-    [[UIColor whiteColor] setStroke];
++    [[RCTUIColor whiteColor] setStroke];
++#if TARGET_OS_OSX
++    [checkPath setLineCapStyle:NSLineCapStyleRound];
++    [checkPath setLineJoinStyle:NSLineJoinStyleRound];
++#else
+     [checkPath setLineCapStyle:kCGLineCapRound];
+     [checkPath setLineJoinStyle:kCGLineJoinRound];
++#endif
+     [checkPath stroke];
+   } else {
+     [[boxColor colorWithAlphaComponent:1.0] setStroke];
+     [boxPath stroke];
+   }
+ 
+-  UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
++#if TARGET_OS_OSX
++  [result unlockFocus];
++  return (RCTUIImage *)result;
++#else
++  RCTUIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+   UIGraphicsEndImageContext();
+-
+   return result;
++#endif
+ }
+ 
+ @end
+diff --git a/node_modules/react-native-enriched/ios/extensions/ColorExtension.h b/node_modules/react-native-enriched/ios/extensions/ColorExtension.h
+index 1ed3851..6c791b2 100644
+--- a/node_modules/react-native-enriched/ios/extensions/ColorExtension.h
++++ b/node_modules/react-native-enriched/ios/extensions/ColorExtension.h
+@@ -1,7 +1,8 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ #pragma once
+ 
+-@interface UIColor (ColorExtension)
+-- (BOOL)isEqualToColor:(UIColor *)otherColor;
+-- (UIColor *)colorWithAlphaIfNotTransparent:(CGFloat)newAlpha;
++@interface RCTUIColor (ColorExtension)
++- (BOOL)isEqualToColor:(RCTUIColor *)otherColor;
++- (RCTUIColor *)colorWithAlphaIfNotTransparent:(CGFloat)newAlpha;
+ @end
+diff --git a/node_modules/react-native-enriched/ios/extensions/ColorExtension.mm b/node_modules/react-native-enriched/ios/extensions/ColorExtension.mm
+index 0cc59b7..c931ace 100644
+--- a/node_modules/react-native-enriched/ios/extensions/ColorExtension.mm
++++ b/node_modules/react-native-enriched/ios/extensions/ColorExtension.mm
+@@ -1,10 +1,10 @@
+ #import "ColorExtension.h"
+ 
+-@implementation UIColor (ColorExtension)
+-- (BOOL)isEqualToColor:(UIColor *)otherColor {
++@implementation RCTUIColor (ColorExtension)
++- (BOOL)isEqualToColor:(RCTUIColor *)otherColor {
+   CGColorSpaceRef colorSpaceRGB = CGColorSpaceCreateDeviceRGB();
+ 
+-  UIColor * (^convertColorToRGBSpace)(UIColor *) = ^(UIColor *color) {
++  RCTUIColor * (^convertColorToRGBSpace)(RCTUIColor *) = ^(RCTUIColor *color) {
+     if (CGColorSpaceGetModel(CGColorGetColorSpace(color.CGColor)) ==
+         kCGColorSpaceModelMonochrome) {
+       const CGFloat *oldComponents = CGColorGetComponents(color.CGColor);
+@@ -12,7 +12,7 @@ - (BOOL)isEqualToColor:(UIColor *)otherColor {
+                                oldComponents[0], oldComponents[1]};
+       CGColorRef colorRef = CGColorCreate(colorSpaceRGB, components);
+ 
+-      UIColor *color = [UIColor colorWithCGColor:colorRef];
++      RCTUIColor *color = [RCTUIColor colorWithCGColor:colorRef];
+       CGColorRelease(colorRef);
+       return color;
+     } else {
+@@ -20,14 +20,14 @@ - (BOOL)isEqualToColor:(UIColor *)otherColor {
+     }
+   };
+ 
+-  UIColor *selfColor = convertColorToRGBSpace(self);
++  RCTUIColor *selfColor = convertColorToRGBSpace(self);
+   otherColor = convertColorToRGBSpace(otherColor);
+   CGColorSpaceRelease(colorSpaceRGB);
+ 
+   return [selfColor isEqual:otherColor];
+ }
+ 
+-- (UIColor *)colorWithAlphaIfNotTransparent:(CGFloat)newAlpha {
++- (RCTUIColor *)colorWithAlphaIfNotTransparent:(CGFloat)newAlpha {
+   CGFloat alpha = 0.0;
+   [self getRed:nil green:nil blue:nil alpha:&alpha];
+   if (alpha > 0.0) {
+diff --git a/node_modules/react-native-enriched/ios/extensions/FontExtension.h b/node_modules/react-native-enriched/ios/extensions/FontExtension.h
+index 0b0ab84..15fdce3 100644
+--- a/node_modules/react-native-enriched/ios/extensions/FontExtension.h
++++ b/node_modules/react-native-enriched/ios/extensions/FontExtension.h
+@@ -1,4 +1,5 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ #pragma once
+ 
+ @interface UIFont (FontExtension)
+diff --git a/node_modules/react-native-enriched/ios/extensions/ImageExtension.h b/node_modules/react-native-enriched/ios/extensions/ImageExtension.h
+index 5d18e31..bdf9af4 100644
+--- a/node_modules/react-native-enriched/ios/extensions/ImageExtension.h
++++ b/node_modules/react-native-enriched/ios/extensions/ImageExtension.h
+@@ -1,21 +1,22 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ /**
+-        UIImage (animatedGIF)
++        RCTUIImage (animatedGIF)
+ 
+-    This category adds class methods to `UIImage` to create an animated
+-   `UIImage` from an animated GIF.
++    This category adds class methods to `RCTUIImage` to create an animated
++   `RCTUIImage` from an animated GIF.
+ */
+-@interface UIImage (ImageExtension)
++@interface RCTUIImage (ImageExtension)
+ 
+ /*
+-        UIImage *animation = [UIImage animatedImageWithAnimatedGIFData:theData];
++        RCTUIImage *animation = [RCTUIImage animatedImageWithAnimatedGIFData:theData];
+ 
+-    I interpret `theData` as a GIF.  I create an animated `UIImage` using the
++    I interpret `theData` as a GIF.  I create an animated `RCTUIImage` using the
+    source images in the GIF.
+ 
+     The GIF stores a separate duration for each frame, in units of centiseconds
+-   (hundredths of a second).  However, a `UIImage` only has a single, total
++   (hundredths of a second).  However, a `RCTUIImage` only has a single, total
+    `duration` property, which is a floating-point number.
+ 
+     To handle this mismatch, I add each source image (from the GIF) to
+@@ -29,7 +30,7 @@
+    frame 0 3/3 = 1 time, then frame 1 9/3 = 3 times, then frame 2 15/3 = 5
+    times.  I set `animation.duration` to (3+9+15)/100 = 0.27 seconds.
+ */
+-+ (UIImage *_Nullable)animatedImageWithAnimatedGIFData:
+++ (RCTUIImage *_Nullable)animatedImageWithAnimatedGIFData:
+     (NSData *_Nonnull)theData;
+ 
+ @end
+diff --git a/node_modules/react-native-enriched/ios/extensions/ImageExtension.mm b/node_modules/react-native-enriched/ios/extensions/ImageExtension.mm
+index 73997b0..e2c0411 100644
+--- a/node_modules/react-native-enriched/ios/extensions/ImageExtension.mm
++++ b/node_modules/react-native-enriched/ios/extensions/ImageExtension.mm
+@@ -1,5 +1,6 @@
+ #import "ImageExtension.h"
+ #import <ImageIO/ImageIO.h>
++#import <TargetConditionals.h>
+ #include <cmath>
+ #include <vector>
+ 
+@@ -12,8 +13,8 @@
+ #endif
+ 
+ // implementation from:
+-// https://github.com/mayoff/uiimage-from-animated-gif/blob/master/uiimage-from-animated-gif/UIImage%2BanimatedGIF.m
+-@implementation UIImage (ImageExtension)
++// https://github.com/mayoff/uiimage-from-animated-gif/blob/master/uiimage-from-animated-gif/RCTUIImage%2BanimatedGIF.m
++@implementation RCTUIImage (ImageExtension)
+ 
+ static int delayCentisecondsForImageAtIndex(CGImageSourceRef const source,
+                                             size_t const i) {
+@@ -96,7 +97,12 @@ static int vectorGCD(const std::vector<int> &values) {
+   NSMutableArray *frames = [NSMutableArray arrayWithCapacity:frameCount];
+ 
+   for (size_t i = 0; i < images.size(); ++i) {
+-    UIImage *const frame = [UIImage imageWithCGImage:images[i]];
++#if TARGET_OS_OSX
++    RCTUIImage *const frame =
++        [[RCTUIImage alloc] initWithCGImage:images[i] size:NSZeroSize];
++#else
++    RCTUIImage *const frame = [RCTUIImage imageWithCGImage:images[i]];
++#endif
+     for (size_t j = delayCentiseconds[i] / gcd; j > 0; --j) {
+       [frames addObject:frame];
+     }
+@@ -111,7 +117,7 @@ static void releaseImages(const std::vector<CGImageRef> &images) {
+   }
+ }
+ 
+-static UIImage *
++static RCTUIImage *
+ animatedImageWithAnimatedGIFImageSource(CGImageSourceRef const source) {
+   size_t const count = CGImageSourceGetCount(source);
+   if (count == 0) {
+@@ -128,19 +134,23 @@ static void releaseImages(const std::vector<CGImageRef> &images) {
+   NSArray *const frames =
+       frameArray(images, delayCentiseconds, totalDurationCentiseconds);
+ 
+-  UIImage *const animation = [UIImage
++#if TARGET_OS_OSX
++  RCTUIImage *const animation = frames.count > 0 ? frames[0] : nil;
++#else
++  RCTUIImage *const animation = [RCTUIImage
+       animatedImageWithImages:frames
+                      duration:(NSTimeInterval)totalDurationCentiseconds /
+                               100.0];
++#endif
+ 
+   releaseImages(images);
+   return animation;
+ }
+ 
+-static UIImage *animatedImageWithAnimatedGIFReleasingImageSource(
++static RCTUIImage *animatedImageWithAnimatedGIFReleasingImageSource(
+     CGImageSourceRef CF_RELEASES_ARGUMENT source) {
+   if (source) {
+-    UIImage *const image = animatedImageWithAnimatedGIFImageSource(source);
++    RCTUIImage *const image = animatedImageWithAnimatedGIFImageSource(source);
+     CFRelease(source);
+     return image;
+   } else {
+@@ -148,9 +158,13 @@ static void releaseImages(const std::vector<CGImageRef> &images) {
+   }
+ }
+ 
+-+ (UIImage *)animatedImageWithAnimatedGIFData:(NSData *)data {
+++ (RCTUIImage *)animatedImageWithAnimatedGIFData:(NSData *)data {
++#if TARGET_OS_OSX
++  return (RCTUIImage *)UIImageWithData(data);
++#else
+   return animatedImageWithAnimatedGIFReleasingImageSource(
+       CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL));
++#endif
+ }
+ 
+ @end
+diff --git a/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.h b/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.h
+index e8e217a..0ef3464 100644
+--- a/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.h
++++ b/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface NSLayoutManager (LayoutManagerExtension)
+ @property(nonatomic, weak) id input;
+diff --git a/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.mm b/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.mm
+index 1617364..ee8296f 100644
+--- a/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.mm
++++ b/node_modules/react-native-enriched/ios/extensions/LayoutManagerExtension.mm
+@@ -4,6 +4,7 @@
+ #import "ParagraphsUtils.h"
+ #import "StyleHeaders.h"
+ #import <objc/runtime.h>
++#import <TargetConditionals.h>
+ 
+ @implementation NSLayoutManager (LayoutManagerExtension)
+ 
+@@ -75,7 +76,7 @@ - (void)drawCodeBlocks:(EnrichedTextInputView *)typedInput
+       [codeBlockStyle findAllOccurences:visibleCharRange];
+   NSArray<StylePair *> *mergedCodeBlocks =
+       [self mergeContiguousStylePairs:allCodeBlocks];
+-  UIColor *bgColor = [[typedInput->config codeBlockBgColor]
++  RCTUIColor *bgColor = [[typedInput->config codeBlockBgColor]
+       colorWithAlphaIfNotTransparent:0.4];
+   CGFloat radius = [typedInput->config codeBlockBorderRadius];
+   [bgColor setFill];
+@@ -123,19 +124,29 @@ - (void)drawCodeBlocks:(EnrichedTextInputView *)typedInput
+                                      lineBgRect.size.width =
+                                          textContainer.size.width;
+ 
+-                                     UIRectCorner cornersForThisLine = 0;
++                                     BOOL isLastLineOfParagraph =
++                                         (NSMaxRange(glyphRange) >=
++                                          NSMaxRange(paragraphGlyphRange));
+ 
++#if TARGET_OS_OSX
++                                     BOOL shouldRound = (isFirstParagraph &&
++                                                         isFirstLineOfParagraph) ||
++                                                        (isLastParagraph &&
++                                                         isLastLineOfParagraph);
++                                     CGFloat xRadius = shouldRound ? radius : 0;
++                                     CGFloat yRadius = shouldRound ? radius : 0;
++                                     UIBezierPath *path = [UIBezierPath
++                                         bezierPathWithRoundedRect:lineBgRect
++                                                           xRadius:xRadius
++                                                           yRadius:yRadius];
++#else
++                                     UIRectCorner cornersForThisLine = 0;
+                                      if (isFirstParagraph &&
+                                          isFirstLineOfParagraph) {
+                                        cornersForThisLine =
+                                            UIRectCornerTopLeft |
+                                            UIRectCornerTopRight;
+                                      }
+-
+-                                     BOOL isLastLineOfParagraph =
+-                                         (NSMaxRange(glyphRange) >=
+-                                          NSMaxRange(paragraphGlyphRange));
+-
+                                      if (isLastParagraph &&
+                                          isLastLineOfParagraph) {
+                                        cornersForThisLine =
+@@ -143,7 +154,6 @@ - (void)drawCodeBlocks:(EnrichedTextInputView *)typedInput
+                                            UIRectCornerBottomLeft |
+                                            UIRectCornerBottomRight;
+                                      }
+-
+                                      UIBezierPath *path = [UIBezierPath
+                                          bezierPathWithRoundedRect:lineBgRect
+                                                  byRoundingCorners:
+@@ -151,6 +161,7 @@ - (void)drawCodeBlocks:(EnrichedTextInputView *)typedInput
+                                                        cornerRadii:CGSizeMake(
+                                                                        radius,
+                                                                        radius)];
++#endif
+                                      [path fill];
+ 
+                                      isFirstLineOfParagraph = NO;
+@@ -237,7 +248,11 @@ - (void)drawBlockQuotes:(EnrichedTextInputView *)typedInput
+                                        CGRectMake(x, y, width, height);
+                                    [[typedInput->config blockquoteBorderColor]
+                                        setFill];
++#if TARGET_OS_OSX
++                                   NSRectFill(lineRect);
++#else
+                                    UIRectFill(lineRect);
++#endif
+                                  }];
+   }
+ }
+@@ -369,7 +384,7 @@ - (void)drawCheckbox:(EnrichedTextInputView *)typedInput
+             usedRect:(CGRect)usedRect {
+   BOOL isChecked = [markerFormat isEqualToString:@"{checkbox:1}"];
+ 
+-  UIImage *image = isChecked ? typedInput->config.checkboxCheckedImage
++  RCTUIImage *image = isChecked ? typedInput->config.checkboxCheckedImage
+                              : typedInput->config.checkboxUncheckedImage;
+   CGFloat gapWidth = [typedInput->config checkboxListGapWidth];
+   CGFloat boxSize = [typedInput->config checkboxListBoxSize];
+@@ -378,7 +393,14 @@ - (void)drawCheckbox:(EnrichedTextInputView *)typedInput
+   CGFloat boxX = origin.x + usedRect.origin.x - gapWidth - boxSize;
+   CGFloat boxY = centerY - boxSize / 2.0;
+ 
++#if TARGET_OS_OSX
++  [image drawAtPoint:CGPointMake(boxX, boxY)
++            fromRect:NSZeroRect
++           operation:NSCompositingOperationSourceOver
++            fraction:1.0];
++#else
+   [image drawAtPoint:CGPointMake(boxX, boxY)];
++#endif
+ }
+ 
+ - (void)drawBullet:(EnrichedTextInputView *)typedInput
+diff --git a/node_modules/react-native-enriched/ios/extensions/StringExtension.h b/node_modules/react-native-enriched/ios/extensions/StringExtension.h
+index 365ae8a..7787531 100644
+--- a/node_modules/react-native-enriched/ios/extensions/StringExtension.h
++++ b/node_modules/react-native-enriched/ios/extensions/StringExtension.h
+@@ -1,5 +1,6 @@
+ #include "string"
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ #pragma once
+ 
+ @interface NSString (StringExtension)
+diff --git a/node_modules/react-native-enriched/ios/inputParser/InputParser.h b/node_modules/react-native-enriched/ios/inputParser/InputParser.h
+index b54ace3..a60ceb0 100644
+--- a/node_modules/react-native-enriched/ios/inputParser/InputParser.h
++++ b/node_modules/react-native-enriched/ios/inputParser/InputParser.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface InputParser : NSObject
+ - (instancetype _Nonnull)initWithInput:(id _Nonnull)input;
+diff --git a/node_modules/react-native-enriched/ios/inputParser/InputParser.mm b/node_modules/react-native-enriched/ios/inputParser/InputParser.mm
+index 41f1d30..c5d96f8 100644
+--- a/node_modules/react-native-enriched/ios/inputParser/InputParser.mm
++++ b/node_modules/react-native-enriched/ios/inputParser/InputParser.mm
+@@ -605,11 +605,19 @@ - (void)replaceWholeFromHtml:(NSString *_Nonnull)html {
+   NSArray *stylesInfo = (NSArray *)processingResult[1];
+ 
+   // reset the text first and reset typing attributes
++#if TARGET_OS_OSX
++  _input->textView.string = @"";
++#else
+   _input->textView.text = @"";
++#endif
+   _input->textView.typingAttributes = _input->defaultTypingAttributes;
+ 
+   // set new text
++#if TARGET_OS_OSX
++  _input->textView.string = plainText;
++#else
+   _input->textView.text = plainText;
++#endif
+ 
+   // re-apply the styles
+   [self applyProcessedStyles:stylesInfo
+diff --git a/node_modules/react-native-enriched/ios/inputTextView/InputTextView.h b/node_modules/react-native-enriched/ios/inputTextView/InputTextView.h
+index 6ddac2e..fcb6b95 100644
+--- a/node_modules/react-native-enriched/ios/inputTextView/InputTextView.h
++++ b/node_modules/react-native-enriched/ios/inputTextView/InputTextView.h
+@@ -1,6 +1,28 @@
+ #pragma once
+-#import <UIkit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
++#import <TargetConditionals.h>
++
++#if TARGET_OS_OSX
++typedef NS_ENUM(NSInteger, UITextAutocapitalizationType) {
++  UITextAutocapitalizationTypeNone = 0,
++  UITextAutocapitalizationTypeWords = 1,
++  UITextAutocapitalizationTypeSentences = 2,
++  UITextAutocapitalizationTypeAllCharacters = 3,
++};
++#endif
+ 
+ @interface InputTextView : UITextView
+ @property(nonatomic, weak) id input;
++#if TARGET_OS_OSX
++@property(nonatomic, copy) NSString *text;
++@property(nonatomic, assign) BOOL scrollEnabled;
++@property(nonatomic, copy) RCTUIColor *tintColor;
++@property(nonatomic, assign) BOOL adjustsFontForContentSizeCategory;
++@property(nonatomic, assign) UITextAutocapitalizationType autocapitalizationType;
++@property(nonatomic, readonly, nullable) id markedTextRange;
++@property(nonatomic, assign) CGSize contentSize;
++- (void)bringSubviewToFront:(NSView *)view;
++- (BOOL)isFirstResponder;
++#endif
+ @end
+diff --git a/node_modules/react-native-enriched/ios/inputTextView/InputTextView.mm b/node_modules/react-native-enriched/ios/inputTextView/InputTextView.mm
+index 076d163..d786e91 100644
+--- a/node_modules/react-native-enriched/ios/inputTextView/InputTextView.mm
++++ b/node_modules/react-native-enriched/ios/inputTextView/InputTextView.mm
+@@ -3,8 +3,113 @@
+ #import "StringExtension.h"
+ #import "TextInsertionUtils.h"
+ #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
++#import <TargetConditionals.h>
+ 
+ @implementation InputTextView
++#if TARGET_OS_OSX
++{
++  BOOL _scrollEnabled;
++  RCTUIColor *_tintColor;
++  BOOL _adjustsFontForContentSizeCategory;
++  UITextAutocapitalizationType _autocapitalizationType;
++  CGSize _contentSize;
++}
++
++- (instancetype)init {
++  self = [super init];
++  if (self) {
++    _scrollEnabled = YES;
++    _adjustsFontForContentSizeCategory = YES;
++    _autocapitalizationType = UITextAutocapitalizationTypeSentences;
++    _contentSize = CGSizeZero;
++  }
++  return self;
++}
++
++- (NSString *)text {
++  return self.string ?: @"";
++}
++
++- (void)setText:(NSString *)text {
++  self.string = text ?: @"";
++}
++
++- (BOOL)scrollEnabled {
++  return _scrollEnabled;
++}
++
++- (void)setScrollEnabled:(BOOL)scrollEnabled {
++  _scrollEnabled = scrollEnabled;
++  if (self.enclosingScrollView) {
++    self.enclosingScrollView.hasVerticalScroller = scrollEnabled;
++    self.enclosingScrollView.hasHorizontalScroller = scrollEnabled;
++  }
++}
++
++- (RCTUIColor *)tintColor {
++  return _tintColor;
++}
++
++- (void)setTintColor:(RCTUIColor *)tintColor {
++  _tintColor = tintColor;
++  if (tintColor) {
++    [self setInsertionPointColor:tintColor];
++  }
++}
++
++- (BOOL)adjustsFontForContentSizeCategory {
++  return _adjustsFontForContentSizeCategory;
++}
++
++- (void)setAdjustsFontForContentSizeCategory:(BOOL)value {
++  _adjustsFontForContentSizeCategory = value;
++}
++
++- (UITextAutocapitalizationType)autocapitalizationType {
++  return _autocapitalizationType;
++}
++
++- (void)setAutocapitalizationType:(UITextAutocapitalizationType)value {
++  _autocapitalizationType = value;
++}
++
++- (id)markedTextRange {
++  NSRange marked = [self markedRange];
++  return marked.location == NSNotFound ? nil : [NSValue valueWithRange:marked];
++}
++
++- (CGSize)contentSize {
++  return !CGSizeEqualToSize(_contentSize, CGSizeZero) ? _contentSize
++                                                      : self.frame.size;
++}
++
++- (void)setContentSize:(CGSize)contentSize {
++  _contentSize = contentSize;
++}
++
++- (void)bringSubviewToFront:(NSView *)view {
++  if (!view || view.superview != self) {
++    return;
++  }
++  [view removeFromSuperview];
++  [self addSubview:view];
++}
++
++- (BOOL)isFirstResponder {
++  return self.window.firstResponder == self;
++}
++
++- (BOOL)acceptsFirstResponder {
++  return YES;
++}
++
++- (void)mouseDown:(NSEvent *)event {
++  if (self.window != nil) {
++    [self.window makeFirstResponder:self];
++  }
++  [super mouseDown:event];
++}
++#endif
+ 
+ - (void)copy:(id)sender {
+   EnrichedTextInputView *typedInput = (EnrichedTextInputView *)_input;
+@@ -37,12 +142,26 @@ - (void)copy:(id)sender {
+           }
+                        error:nullptr];
+ 
++#if !TARGET_OS_OSX
+   UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
+   [pasteboard setItems:@[ @{
+                 UTTypeUTF8PlainText.identifier : fixedPlainText,
+                 UTTypeHTML.identifier : parsedHtml,
+                 UTTypeRTF.identifier : rtfData
+               } ]];
++#else
++  NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
++  [pasteboard clearContents];
++  if (fixedPlainText) {
++    [pasteboard setString:fixedPlainText forType:NSPasteboardTypeString];
++  }
++  if (parsedHtml) {
++    [pasteboard setString:parsedHtml forType:NSPasteboardTypeHTML];
++  }
++  if (rtfData) {
++    [pasteboard setData:rtfData forType:NSPasteboardTypeRTF];
++  }
++#endif
+ }
+ 
+ - (void)paste:(id)sender {
+@@ -51,9 +170,11 @@ - (void)paste:(id)sender {
+     return;
+   }
+ 
++  NSRange currentRange = typedInput->textView.selectedRange;
++
++#if !TARGET_OS_OSX
+   UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
+   NSArray<NSString *> *pasteboardTypes = pasteboard.pasteboardTypes;
+-  NSRange currentRange = typedInput->textView.selectedRange;
+ 
+   // Check the pasteboard for supported image formats. If found, save them to
+   // temporary storage then emit the 'onPasteImages' event and stop processing
+@@ -93,7 +214,7 @@ - (void)paste:(id)sender {
+       ext = info[@"ext"];
+       mimeType = info[@"mime"];
+ 
+-      UIImage *imageInfo = [UIImage imageWithData:imageData];
++      RCTUIImage *imageInfo = (RCTUIImage *)UIImageWithData(imageData);
+ 
+       if (imageInfo) {
+         NSString *path = [self saveToTempFile:imageData extension:ext];
+@@ -151,6 +272,58 @@ - (void)paste:(id)sender {
+                                 range:currentRange
+                                 input:typedInput];
+   }
++#else
++  NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
++
++  NSMutableArray<NSDictionary *> *foundImages = [NSMutableArray new];
++  NSArray<NSImage *> *images =
++      [pasteboard readObjectsForClasses:@[ [NSImage class] ] options:@{}];
++
++  for (NSImage *image in images) {
++    NSData *imageData = UIImagePNGRepresentation(image);
++    if (!imageData) {
++      continue;
++    }
++
++    NSString *path = [self saveToTempFile:imageData extension:@"png"];
++    if (!path) {
++      continue;
++    }
++
++    [foundImages addObject:@{
++      @"uri" : path,
++      @"type" : @"image/png",
++      @"width" : @(image.size.width),
++      @"height" : @(image.size.height)
++    }];
++  }
++
++  if (foundImages.count > 0) {
++    [typedInput emitOnPasteImagesEvent:foundImages];
++    return;
++  }
++
++  NSString *htmlString = [pasteboard stringForType:NSPasteboardTypeHTML];
++  if (htmlString.length > 0) {
++    NSString *initiallyProcessedHtml =
++        [typedInput->parser initiallyProcessHtml:htmlString];
++    if (initiallyProcessedHtml != nullptr) {
++      currentRange.length > 0
++          ? [typedInput->parser replaceFromHtml:initiallyProcessedHtml
++                                          range:currentRange]
++          : [typedInput->parser insertFromHtml:initiallyProcessedHtml
++                                      location:currentRange.location];
++    } else {
++      [self tryHandlingPlainTextItemsIn:pasteboard
++                                  range:currentRange
++                                  input:typedInput];
++    }
++  } else {
++    [self tryHandlingPlainTextItemsIn:pasteboard
++                                range:currentRange
++                                input:typedInput];
++  }
++#endif
+ 
+   [typedInput anyTextMayHaveBeenModified];
+ }
+@@ -173,16 +346,34 @@ - (NSDictionary *)detectImageFormat:(NSString *)type {
+   }
+ }
+ 
+-- (NSData *)getDataForImageItem:(NSData *)imageData type:(NSString *)type {
+-  UIImage *image = (UIImage *)imageData;
++- (NSData *)getDataForImageItem:(id)imageItem type:(NSString *)type {
++  if ([imageItem isKindOfClass:[NSData class]]) {
++    return (NSData *)imageItem;
++  }
++
++  RCTUIImage *image = nil;
++#if TARGET_OS_OSX
++  if ([imageItem isKindOfClass:[NSImage class]]) {
++    image = (RCTUIImage *)imageItem;
++  }
++#else
++  if ([imageItem isKindOfClass:[RCTUIImage class]]) {
++    image = (RCTUIImage *)imageItem;
++  }
++#endif
++  if (!image) {
++    return nil;
++  }
+ 
+   if ([type isEqual:UTTypePNG.identifier]) {
+     return UIImagePNGRepresentation(image);
+-  } else if ([type isEqual:UTTypeHEIC.identifier]) {
++  }
++#if !TARGET_OS_OSX
++  if ([type isEqual:UTTypeHEIC.identifier]) {
+     return UIImageHEICRepresentation(image);
+-  } else {
+-    return UIImageJPEGRepresentation(image, 1.0);
+   }
++#endif
++  return UIImageJPEGRepresentation(image, 1.0);
+ }
+ 
+ - (NSString *)saveToTempFile:(NSData *)data extension:(NSString *)ext {
+@@ -201,9 +392,10 @@ - (NSString *)saveToTempFile:(NSData *)data extension:(NSString *)ext {
+   return nil;
+ }
+ 
+-- (void)tryHandlingPlainTextItemsIn:(UIPasteboard *)pasteboard
++- (void)tryHandlingPlainTextItemsIn:(id)pasteboard
+                               range:(NSRange)range
+                               input:(EnrichedTextInputView *)input {
++#if !TARGET_OS_OSX
+   NSArray *existingTypes = pasteboard.pasteboardTypes;
+   NSArray *handledTypes = @[
+     UTTypeUTF8PlainText.identifier, UTTypePlainText.identifier,
+@@ -227,6 +419,23 @@ - (void)tryHandlingPlainTextItemsIn:(UIPasteboard *)pasteboard
+       plainText = [(NSURL *)value absoluteString];
+     }
+   }
++#else
++  NSString *plainText = [pasteboard stringForType:NSPasteboardTypeString];
++
++  if (!plainText) {
++    NSString *urlString = [pasteboard stringForType:NSPasteboardTypeURL];
++    if (urlString.length > 0) {
++      plainText = urlString;
++    }
++  }
++
++  if (!plainText) {
++    NSURL *url = [NSURL URLFromPasteboard:pasteboard];
++    if (url) {
++      plainText = url.absoluteString;
++    }
++  }
++#endif
+ 
+   if (!plainText) {
+     return;
+@@ -262,13 +471,29 @@ - (void)cut:(id)sender {
+ 
+ - (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+   if (action == @selector(paste:)) {
++#if !TARGET_OS_OSX
+     UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
+     // Enable Paste if clipboard has Text OR Images
+     if (pasteboard.hasStrings || pasteboard.hasImages) {
+       return YES;
+     }
++#else
++    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
++    BOOL hasText = [pasteboard stringForType:NSPasteboardTypeString] != nil ||
++                   [pasteboard stringForType:NSPasteboardTypeHTML] != nil ||
++                   [pasteboard stringForType:NSPasteboardTypeURL] != nil;
++    BOOL hasImages =
++        [pasteboard canReadObjectForClasses:@[ [NSImage class] ] options:@{}];
++    if (hasText || hasImages) {
++      return YES;
++    }
++#endif
+   }
++#if TARGET_OS_OSX
++  return [super respondsToSelector:action];
++#else
+   return [super canPerformAction:action withSender:sender];
++#endif
+ }
+ 
+ @end
+diff --git a/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.h b/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.h
+index d1501cf..795b739 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.h
++++ b/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.h
+@@ -4,7 +4,7 @@
+ @interface ImageAttachment : MediaAttachment
+ 
+ @property(nonatomic, strong) ImageData *imageData;
+-@property(nonatomic, strong) UIImage *storedAnimatedImage;
++@property(nonatomic, strong) RCTUIImage *storedAnimatedImage;
+ 
+ - (instancetype)initWithImageData:(ImageData *)data;
+ 
+diff --git a/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.mm b/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.mm
+index 95a5fae..7ae8a81 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.mm
++++ b/node_modules/react-native-enriched/ios/interfaces/ImageAttachment.mm
+@@ -13,7 +13,7 @@ - (instancetype)initWithImageData:(ImageData *)data {
+   // Assign an empty image to reserve layout space within the text system.
+   // The actual image is not drawn here; it is rendered and overlaid by a
+   // separate ImageView.
+-  self.image = [UIImage new];
++  self.image = [RCTUIImage new];
+ 
+   [self loadAsync];
+   return self;
+@@ -49,9 +49,20 @@ - (CGRect)attachmentBoundsForTextContainer:(NSTextContainer *)textContainer
+ }
+ 
+ - (void)loadAsync {
++#if TARGET_OS_OSX
++  RCTUIImage *placeholder =
++      (RCTUIImage *)[NSImage imageWithSystemSymbolName:@"photo"
++                                 accessibilityDescription:nil];
++  if (!placeholder) {
++    placeholder = [RCTUIImage new];
++  }
++#else
++  RCTUIImage *placeholder = [RCTUIImage systemImageNamed:@"photo"];
++#endif
++
+   NSURL *url = [NSURL URLWithString:self.uri];
+   if (!url) {
+-    self.storedAnimatedImage = [UIImage systemImageNamed:@"photo"];
++    self.storedAnimatedImage = placeholder;
+     return;
+   }
+ 
+@@ -60,10 +71,10 @@ - (void)loadAsync {
+ 
+     // We pass all image data (including static formats like PNG or JPEG)
+     // through the GIF parser. It safely acts as a universal parser, returning
+-    // a single-frame UIImage for static formats and an animated UIImage for
++    // a single-frame RCTUIImage for static formats and an animated RCTUIImage for
+     // GIFs.
+-    UIImage *img = bytes ? [UIImage animatedImageWithAnimatedGIFData:bytes]
+-                         : [UIImage systemImageNamed:@"photo"];
++    RCTUIImage *img = bytes ? [RCTUIImage animatedImageWithAnimatedGIFData:bytes]
++                         : placeholder;
+ 
+     dispatch_async(dispatch_get_main_queue(), ^{
+       self.storedAnimatedImage = img;
+diff --git a/node_modules/react-native-enriched/ios/interfaces/ImageData.h b/node_modules/react-native-enriched/ios/interfaces/ImageData.h
+index 266ec62..bfdc8bd 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/ImageData.h
++++ b/node_modules/react-native-enriched/ios/interfaces/ImageData.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface ImageData : NSObject
+ 
+diff --git a/node_modules/react-native-enriched/ios/interfaces/LinkData.h b/node_modules/react-native-enriched/ios/interfaces/LinkData.h
+index 70d083d..ba39110 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/LinkData.h
++++ b/node_modules/react-native-enriched/ios/interfaces/LinkData.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface LinkData : NSObject
+ 
+diff --git a/node_modules/react-native-enriched/ios/interfaces/LinkRegexConfig.h b/node_modules/react-native-enriched/ios/interfaces/LinkRegexConfig.h
+index c08c353..85dbcf8 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/LinkRegexConfig.h
++++ b/node_modules/react-native-enriched/ios/interfaces/LinkRegexConfig.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #import <ReactNativeEnriched/Props.h>
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ using namespace facebook::react;
+ 
+diff --git a/node_modules/react-native-enriched/ios/interfaces/MediaAttachment.h b/node_modules/react-native-enriched/ios/interfaces/MediaAttachment.h
+index 050a993..113ee9e 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/MediaAttachment.h
++++ b/node_modules/react-native-enriched/ios/interfaces/MediaAttachment.h
+@@ -1,4 +1,5 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @class MediaAttachment;
+ 
+diff --git a/node_modules/react-native-enriched/ios/interfaces/MentionParams.h b/node_modules/react-native-enriched/ios/interfaces/MentionParams.h
+index 698a31d..9af4903 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/MentionParams.h
++++ b/node_modules/react-native-enriched/ios/interfaces/MentionParams.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface MentionParams : NSObject
+ @property NSString *text;
+diff --git a/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.h b/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.h
+index d0d59dd..c794842 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.h
++++ b/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.h
+@@ -1,12 +1,13 @@
+ #pragma once
+ #import "TextDecorationLineEnum.h"
+ #import "string"
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ #import <folly/dynamic.h>
+ 
+ @interface MentionStyleProps : NSObject
+-@property UIColor *color;
+-@property UIColor *backgroundColor;
++@property RCTUIColor *color;
++@property RCTUIColor *backgroundColor;
+ @property TextDecorationLineEnum decorationLine;
+ + (NSDictionary *)getSinglePropsFromFollyDynamic:(folly::dynamic)folly;
+ + (NSDictionary *)getComplexPropsFromFollyDynamic:(folly::dynamic)folly;
+diff --git a/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.mm b/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.mm
+index 5ea2353..7745594 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.mm
++++ b/node_modules/react-native-enriched/ios/interfaces/MentionStyleProps.mm
+@@ -13,7 +13,7 @@ + (MentionStyleProps *)getSingleMentionStylePropsFromFollyDynamic:
+         facebook::react::Color(int32_t(folly["color"].asInt())));
+     nativeProps.color = RCTUIColorFromSharedColor(color);
+   } else {
+-    nativeProps.color = [UIColor blueColor];
++    nativeProps.color = [RCTUIColor blueColor];
+   }
+ 
+   if (folly["backgroundColor"].isNumber()) {
+@@ -21,7 +21,7 @@ + (MentionStyleProps *)getSingleMentionStylePropsFromFollyDynamic:
+         facebook::react::Color(int32_t(folly["backgroundColor"].asInt())));
+     nativeProps.backgroundColor = RCTUIColorFromSharedColor(bgColor);
+   } else {
+-    nativeProps.backgroundColor = [UIColor yellowColor];
++    nativeProps.backgroundColor = [RCTUIColor yellowColor];
+   }
+ 
+   if (folly["textDecorationLine"].isString()) {
+diff --git a/node_modules/react-native-enriched/ios/interfaces/StylePair.h b/node_modules/react-native-enriched/ios/interfaces/StylePair.h
+index a738e8f..90fb6c3 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/StylePair.h
++++ b/node_modules/react-native-enriched/ios/interfaces/StylePair.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIkit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface StylePair : NSObject
+ 
+diff --git a/node_modules/react-native-enriched/ios/interfaces/StyleTypeEnum.h b/node_modules/react-native-enriched/ios/interfaces/StyleTypeEnum.h
+index 629f1f0..f298b0a 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/StyleTypeEnum.h
++++ b/node_modules/react-native-enriched/ios/interfaces/StyleTypeEnum.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ // the order is aligned with the order of tags in parser
+ typedef NS_ENUM(NSInteger, StyleType) {
+diff --git a/node_modules/react-native-enriched/ios/interfaces/TextDecorationLineEnum.h b/node_modules/react-native-enriched/ios/interfaces/TextDecorationLineEnum.h
+index 726e3ff..73ac5e0 100644
+--- a/node_modules/react-native-enriched/ios/interfaces/TextDecorationLineEnum.h
++++ b/node_modules/react-native-enriched/ios/interfaces/TextDecorationLineEnum.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ typedef NSString *TextDecorationLineEnum NS_TYPED_ENUM;
+ extern TextDecorationLineEnum const DecorationUnderline;
+diff --git a/node_modules/react-native-enriched/ios/styles/BlockQuoteStyle.mm b/node_modules/react-native-enriched/ios/styles/BlockQuoteStyle.mm
+index 0f1a6fb..39e34da 100644
+--- a/node_modules/react-native-enriched/ios/styles/BlockQuoteStyle.mm
++++ b/node_modules/react-native-enriched/ios/styles/BlockQuoteStyle.mm
+@@ -261,8 +261,8 @@ - (void)manageBlockquoteColor {
+                      options:0
+                   usingBlock:^(id _Nullable value, NSRange range,
+                                BOOL *_Nonnull stop) {
+-                    UIColor *newColor = nullptr;
+-                    BOOL colorApplied = [(UIColor *)value
++                    RCTUIColor *newColor = nullptr;
++                    BOOL colorApplied = [(RCTUIColor *)value
+                         isEqualToColor:[_input->config blockquoteColor]];
+ 
+                     if (colorApplied && !selfDetected) {
+diff --git a/node_modules/react-native-enriched/ios/styles/CodeBlockStyle.mm b/node_modules/react-native-enriched/ios/styles/CodeBlockStyle.mm
+index 3495a1d..f24833a 100644
+--- a/node_modules/react-native-enriched/ios/styles/CodeBlockStyle.mm
++++ b/node_modules/react-native-enriched/ios/styles/CodeBlockStyle.mm
+@@ -280,8 +280,8 @@ - (void)manageCodeBlockFontAndColor {
+                      options:0
+                   usingBlock:^(id _Nullable value, NSRange range,
+                                BOOL *_Nonnull stop) {
+-                    UIColor *newColor = nullptr;
+-                    BOOL colorApplied = [(UIColor *)value
++                    RCTUIColor *newColor = nullptr;
++                    BOOL colorApplied = [(RCTUIColor *)value
+                         isEqualToColor:[_input->config codeBlockFgColor]];
+ 
+                     if (colorApplied && !selfDetected) {
+diff --git a/node_modules/react-native-enriched/ios/styles/InlineCodeStyle.mm b/node_modules/react-native-enriched/ios/styles/InlineCodeStyle.mm
+index ed58802..8a5cd71 100644
+--- a/node_modules/react-native-enriched/ios/styles/InlineCodeStyle.mm
++++ b/node_modules/react-native-enriched/ios/styles/InlineCodeStyle.mm
+@@ -170,7 +170,7 @@ - (void)handleNewlines {
+ 
+     NSRange newlineRange = NSMakeRange(index, 1);
+ 
+-    UIColor *bgColor = [storage attribute:NSBackgroundColorAttributeName
++    RCTUIColor *bgColor = [storage attribute:NSBackgroundColorAttributeName
+                                   atIndex:index
+                            effectiveRange:nil];
+ 
+@@ -183,7 +183,7 @@ - (void)handleNewlines {
+ // emojis don't retain monospace font attribute so we check for the background
+ // color if there is no mention
+ - (BOOL)styleCondition:(id _Nullable)value range:(NSRange)range {
+-  UIColor *bgColor = (UIColor *)value;
++  RCTUIColor *bgColor = (RCTUIColor *)value;
+   MentionStyle *mStyle = _input->stylesDict[@([MentionStyle getStyleType])];
+   return bgColor != nullptr && mStyle != nullptr && ![mStyle detectStyle:range];
+ }
+diff --git a/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.h b/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.h
+index 31686fc..e028131 100644
+--- a/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.h
++++ b/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.h
+@@ -1,4 +1,5 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @class EnrichedTextInputView;
+ 
+diff --git a/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.mm b/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.mm
+index 3728b39..65c69fb 100644
+--- a/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.mm
++++ b/node_modules/react-native-enriched/ios/utils/CheckboxHitTestUtils.mm
+@@ -12,8 +12,13 @@ @implementation CheckboxHitTestUtils
+ 
+ + (CGPoint)containerPointFromViewPoint:(CGPoint)point
+                               textView:(UITextView *)textView {
++#if TARGET_OS_OSX
++  return CGPointMake(point.x - textView.textContainerInset.width,
++                     point.y - textView.textContainerInset.height);
++#else
+   return CGPointMake(point.x - textView.textContainerInset.left,
+                      point.y - textView.textContainerInset.top);
++#endif
+ }
+ 
+ // MARK: - Glyph lookup
+diff --git a/node_modules/react-native-enriched/ios/utils/ParagraphAttributesUtils.h b/node_modules/react-native-enriched/ios/utils/ParagraphAttributesUtils.h
+index 9a3d782..0c8ed63 100644
+--- a/node_modules/react-native-enriched/ios/utils/ParagraphAttributesUtils.h
++++ b/node_modules/react-native-enriched/ios/utils/ParagraphAttributesUtils.h
+@@ -1,4 +1,5 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ #pragma once
+ 
+ @interface ParagraphAttributesUtils : NSObject
+diff --git a/node_modules/react-native-enriched/ios/utils/ParagraphsUtils.h b/node_modules/react-native-enriched/ios/utils/ParagraphsUtils.h
+index a6a1cfa..917f24f 100644
+--- a/node_modules/react-native-enriched/ios/utils/ParagraphsUtils.h
++++ b/node_modules/react-native-enriched/ios/utils/ParagraphsUtils.h
+@@ -1,5 +1,6 @@
+ #pragma once
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface ParagraphsUtils : NSObject
+ + (NSArray *)getSeparateParagraphsRangesIn:(UITextView *)textView
+diff --git a/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.h b/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.h
+index b9f5f48..90e6694 100644
+--- a/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.h
++++ b/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.h
+@@ -3,9 +3,15 @@ typedef NS_ENUM(NSInteger, TextBlockTapKind) {
+   TextBlockTapKindCheckbox,
+ };
+ 
++#import <TargetConditionals.h>
++
+ @class EnrichedTextInputView;
+ 
++#if TARGET_OS_OSX
++@interface TextBlockTapGestureRecognizer : NSClickGestureRecognizer
++#else
+ @interface TextBlockTapGestureRecognizer : UITapGestureRecognizer
++#endif
+ - (instancetype _Nonnull)initWithInput:(id _Nonnull)input
+                                 action:(SEL _Nonnull)action;
+ 
+diff --git a/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.mm b/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.mm
+index 16f6d23..b087d20 100644
+--- a/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.mm
++++ b/node_modules/react-native-enriched/ios/utils/TextBlockTapGestureRecognizer.mm
+@@ -11,12 +11,16 @@ - (instancetype)initWithInput:(id)input action:(SEL)action {
+   self = [super initWithTarget:input action:action];
+   _input = input;
+ 
++#if !TARGET_OS_OSX
+   self.cancelsTouchesInView = YES;
+   self.delaysTouchesBegan = YES;
+   self.delaysTouchesEnded = YES;
++#endif
+ 
+   for (UIGestureRecognizer *gr in _input->textView.gestureRecognizers) {
++#if !TARGET_OS_OSX
+     [gr requireGestureRecognizerToFail:self];
++#endif
+   }
+ 
+   return self;
+@@ -30,6 +34,30 @@ - (NSInteger)characterIndex {
+   return _characterIndex;
+ }
+ 
++#if TARGET_OS_OSX
++- (void)mouseDown:(NSEvent *)event {
++  _tapKind = TextBlockTapKindNone;
++  _characterIndex = NSNotFound;
++
++  if (!self.input) {
++    self.state = NSGestureRecognizerStateFailed;
++    return;
++  }
++
++  CGPoint point = [self locationInView:self.input->textView];
++  NSInteger checkboxIndex =
++      [CheckboxHitTestUtils hitTestCheckboxAtPoint:point inInput:self.input];
++
++  if (checkboxIndex >= 0) {
++    _tapKind = TextBlockTapKindCheckbox;
++    _characterIndex = checkboxIndex;
++    self.state = NSGestureRecognizerStateRecognized;
++    return;
++  }
++
++  self.state = NSGestureRecognizerStateFailed;
++}
++#else
+ - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+   _tapKind = TextBlockTapKindNone;
+   _characterIndex = NSNotFound;
+@@ -52,5 +80,6 @@ - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+   }
+   self.state = UIGestureRecognizerStateFailed;
+ }
++#endif
+ 
+ @end
+diff --git a/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.h b/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.h
+index 1012f38..9992d56 100644
+--- a/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.h
++++ b/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.h
+@@ -1,4 +1,5 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface TextInsertionUtils : NSObject
+ + (void)insertText:(NSString *)text
+diff --git a/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.mm b/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.mm
+index 6afa0b8..f2e539e 100644
+--- a/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.mm
++++ b/node_modules/react-native-enriched/ios/utils/TextInsertionUtils.mm
+@@ -27,7 +27,13 @@ + (void)insertText:(NSString *)text
+   [textView.textStorage insertAttributedString:newAttrStr atIndex:index];
+ 
+   if (withSelection) {
+-    if (![textView isFirstResponder]) {
++    BOOL isFirstResponder = NO;
++#if TARGET_OS_OSX
++    isFirstResponder = (textView.window.firstResponder == textView);
++#else
++    isFirstResponder = [textView isFirstResponder];
++#endif
++    if (!isFirstResponder) {
+       [textView reactFocus];
+     }
+     textView.selectedRange = NSMakeRange(index + text.length, 0);
+@@ -56,7 +62,13 @@ + (void)replaceText:(NSString *)text
+   }
+ 
+   if (withSelection) {
+-    if (![textView isFirstResponder]) {
++    BOOL isFirstResponder = NO;
++#if TARGET_OS_OSX
++    isFirstResponder = (textView.window.firstResponder == textView);
++#else
++    isFirstResponder = [textView isFirstResponder];
++#endif
++    if (!isFirstResponder) {
+       [textView reactFocus];
+     }
+     textView.selectedRange = NSMakeRange(range.location + text.length, 0);
+diff --git a/node_modules/react-native-enriched/ios/utils/WordsUtils.h b/node_modules/react-native-enriched/ios/utils/WordsUtils.h
+index c442d11..1fa77c9 100644
+--- a/node_modules/react-native-enriched/ios/utils/WordsUtils.h
++++ b/node_modules/react-native-enriched/ios/utils/WordsUtils.h
+@@ -1,4 +1,5 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ 
+ @interface WordsUtils : NSObject
+ + (NSArray<NSDictionary *> *)getAffectedWordsFromText:(NSString *)text
+diff --git a/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.h b/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.h
+index 7678749..f92e367 100644
+--- a/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.h
++++ b/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.h
+@@ -1,4 +1,5 @@
+-#import <UIKit/UIKit.h>
++#import <React/RCTUIKit.h>
++#import <React/RCTTextUIKit.h>
+ #pragma once
+ 
+ @interface ZeroWidthSpaceUtils : NSObject
+diff --git a/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.mm b/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.mm
+index 4df7d10..8e679c9 100644
+--- a/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.mm
++++ b/node_modules/react-native-enriched/ios/utils/ZeroWidthSpaceUtils.mm
+@@ -88,7 +88,14 @@ + (void)removeSpacesIfNeededinInput:(EnrichedTextInputView *)input {
+   }
+ 
+   // fix the selection if needed
+-  if ([input->textView isFirstResponder]) {
++  BOOL isFirstResponder = NO;
++#if TARGET_OS_OSX
++  isFirstResponder = (input->textView.window.firstResponder == input->textView);
++#else
++  isFirstResponder = [input->textView isFirstResponder];
++#endif
++
++  if (isFirstResponder) {
+     input->textView.selectedRange =
+         NSMakeRange(preRemoveSelection.location + postRemoveLocationOffset,
+                     preRemoveSelection.length + postRemoveLengthOffset);
+@@ -166,7 +173,14 @@ + (void)addSpacesIfNeededinInput:(EnrichedTextInputView *)input {
+   }
+ 
+   // fix the selection if needed
+-  if ([input->textView isFirstResponder]) {
++  BOOL isFirstResponder = NO;
++#if TARGET_OS_OSX
++  isFirstResponder = (input->textView.window.firstResponder == input->textView);
++#else
++  isFirstResponder = [input->textView isFirstResponder];
++#endif
++
++  if (isFirstResponder) {
+     input->textView.selectedRange =
+         NSMakeRange(preAddSelection.location + postAddLocationOffset,
+                     preAddSelection.length + postAddLengthOffset);
