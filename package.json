@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
-    "postinstall": "patch-package",
+    "postinstall": "node ./scripts/ensure-xcode-env.js && patch-package",
+    "setup:xcode-env": "node ./scripts/ensure-xcode-env.js",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "premacos": "node ./scripts/ensure-xcode-env.js",
     "macos": "react-native run-macos"
   },
   "dependencies": {

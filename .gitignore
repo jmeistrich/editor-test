@@ -32,6 +32,8 @@ yarn-error.*
 
 # local env files
 .env*.local
+ios/.xcode.env.local
+macos/.xcode.env.local
 
 # typescript
 *.tsbuildinfo
@@ -41,3 +43,4 @@ yarn-error.*
 /android
 /macos/build
 macos/build-xcode
+*.xcuserstate
